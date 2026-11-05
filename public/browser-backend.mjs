@@ -1,5 +1,6 @@
 import { FFmpeg } from './vendor/ffmpeg/index.js';
 import { planExport, exportGraph } from './export-plan.mjs';
+import { analyzeNative, renderNative } from './native-backend.mjs';
 
 const jobs=new Map();
 const MAX_SIZE=512*1024*1024;
@@ -78,6 +79,16 @@ function canPlay(url) {
 async function analyze(job) {
   const scratch=[];
   try {
+    job.progress=5;job.phase='Analyzing audio…';
+    try {
+      const metadata=await analyzeNative(source.file,job);
+      const previewURL=URL.createObjectURL(source.file);
+      if(await canPlay(previewURL)) {
+        Object.assign(job,metadata,{previewURL,previewMode:'original',status:'ready',progress:100,previewStatus:'ready'});
+        await cacheSource(job);return;
+      }
+      URL.revokeObjectURL(previewURL);
+    }catch{/* Unsupported codecs use the compatible WebAssembly engine. */}
     job.progress=5;job.phase='Loading video engine…';
     const ffmpeg=await mountSource();job.progress=20;job.phase='Analyzing audio…';
     const probeFile=`probe-${job.id}.json`;scratch.push(probeFile);
@@ -124,6 +135,7 @@ export async function upload(file) {
   const job={id,status:'analyzing',progress:0,filename:file.name};jobs.set(id,job);
   analyze(job);return {id};
 }
+function rememberOutput(url){outputUrls.push(url);if(outputUrls.length>3)URL.revokeObjectURL(outputUrls.shift());}
 async function render(job,body) {
   const scratch=[];
   try {
@@ -132,6 +144,13 @@ async function render(job,body) {
     const segments=planExport(body.cuts,original.duration,body.mode||'edited');
     if(!segments.length)throw new Error(body.mode==='removed'?'There are no removed clips to export.':'The cuts cover the entire video. Keep some footage to render.');
     job.duration=segments.reduce((total,c)=>total+c.end-c.start,0);
+    job.phase='Exporting video…';
+    try {
+      const blob=await renderNative(source.file,segments,job);
+      const outputURL=URL.createObjectURL(blob);rememberOutput(outputURL);
+      Object.assign(job,{status:'ready',progress:100,outputURL,processing:'native'});return;
+    }catch{/* Try the software engine if the native codec is unavailable or fails. */}
+    job.progress=0;job.phase='Exporting with compatibility engine…';
     const ffmpeg=await mountSource();
     const filter=`filter-${job.id}.txt`,output=`export-${job.id}.mp4`;scratch.push(filter,output);
     await ffmpeg.writeFile(filter,new TextEncoder().encode(exportGraph(segments,original.hasAudio)));
@@ -140,7 +159,7 @@ async function render(job,body) {
     args.push('-c:v','libx264','-preset','ultrafast','-crf','20','-threads','1','-pix_fmt','yuv420p','-movflags','+faststart',output);
     activeProgress=job;await execute(ffmpeg,args);activeProgress=null;
     const outputURL=URL.createObjectURL(new Blob([await ffmpeg.readFile(output)],{type:'video/mp4'}));
-    outputUrls.push(outputURL);if(outputUrls.length>3)URL.revokeObjectURL(outputUrls.shift());
+    rememberOutput(outputURL);
     Object.assign(job,{status:'ready',progress:100,outputURL});
   }catch(error){job.status='error';job.error=error.message||'Export failed. Try a shorter video or use the local app.';}
   finally {activeProgress=null;if(enginePromise)try{const ffmpeg=await enginePromise;for(const file of scratch)try{await ffmpeg.deleteFile(file);}catch{}}catch{}}

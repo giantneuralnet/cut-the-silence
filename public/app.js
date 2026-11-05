@@ -330,7 +330,7 @@ async function upload(file) {
     const data=await waitForJob(id);loadAnalysis(id,data,file.name);attachPreview(data);
   }catch(error){state.busy=false;state.id=null;$('processing').hidden=true;$('upload').hidden=false;message(error.message);refreshButtons();}
 }
-$('replace').onclick=()=>$('file').click();
+$('replace').onclick=$('upload').onclick=()=>$('file').click();
 $('file').onchange=()=>{const file=$('file').files[0];if(file)upload(file);$('file').value='';};
 ['dragenter','dragover'].forEach(type=>document.addEventListener(type,e=>{e.preventDefault();if(!state.busy&&e.dataTransfer.types.includes('Files'))$('stage').classList.add('dragging');}));
 document.addEventListener('dragleave',e=>{if(!e.relatedTarget)$('stage').classList.remove('dragging');});
@@ -463,7 +463,7 @@ async function exportVideo(mode='edited') {
       button.innerHTML=`<span class="button-spinner"></span><span>${Math.round(data.progress)}%</span>`;
       if(data.status!=='ready')await delay(500);
     }while(data.status!=='ready');
-    $('download').href=data.outputURL||`/media/${id}/output`;$('download').download=mode==='removed'?'removed-clips.mp4':'edited-video.mp4';$('result-label').textContent=mode==='removed'?'Removed clips ready':'Video ready';$('render-result').hidden=false;$('download').click();
+    $('download').href=data.outputURL||`/media/${id}/output`;$('download').download=mode==='removed'?'removed-clips.mp4':'edited-video.mp4';$('result-label').textContent=mode==='removed'?'Removed clips ready':'Video ready';$('render-result').dataset.processing=data.processing||'server';$('render-result').hidden=false;$('download').click();
   }catch(error){message(error.message);}
   finally{state.busy=false;button.innerHTML=icon('download')+`<span>${mode==='removed'?'Export removed clips':'Render'}</span>`;refreshButtons();}
 }

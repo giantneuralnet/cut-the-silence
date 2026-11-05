@@ -13,14 +13,21 @@ A minimal, open-source video editor for removing silence and unwanted takes.
 
 ## Hosted editor
 
-The GitHub Pages version runs FFmpeg in a Web Worker on your computer. Videos
-stay in your browser. The processing engine downloads from jsDelivr on first use;
+The GitHub Pages version uses native WebCodecs for audio analysis and MP4 export
+when the browser supports the source codecs and H.264/AAC encoding. Video decoding
+and encoding request hardware acceleration, including on supported iPhones.
+Safari 26 or newer exposes the audio WebCodecs needed for this path; device,
+codec and resolution support still vary, and the browser chooses the actual
+hardware implementation. No setting needs to be enabled in the editor.
+
+Unsupported codecs fall back to FFmpeg in a Web Worker. Videos stay in your
+browser. The fallback engine downloads from jsDelivr on first use;
 your footage is never sent there. Your latest selected video is cached in
 IndexedDB when browser storage is available, and editing choices are saved in
 local storage. Uploading another video replaces the cached source.
 
 Browser processing supports files up to **512 MB** and depends on available
-memory. Exporting is slower than native FFmpeg, especially for 4K footage.
+memory. The compatibility fallback is slower than native codecs, especially for 4K footage.
 Use the local version for larger recordings and hardware-accelerated export.
 
 ## Run locally
@@ -61,8 +68,8 @@ Advanced contains removed-clip preview and export.
 ## Development and deployment
 
 The UI is plain HTML, CSS and JavaScript with no build step. The optional local
-backend uses only Python's standard library. Browser processing uses a pinned
-MIT-licensed FFmpeg wrapper and a separately downloaded WebAssembly core.
+backend uses only Python's standard library. Browser processing uses pinned Mediabunny (MPL-2.0), an MIT-licensed FFmpeg
+wrapper, and a separately downloaded WebAssembly core.
 
 ```sh
 node --test test_*.mjs

@@ -30,10 +30,10 @@
 
     <section class="stage" id="stage" aria-label="Video preview">
       <video id="video" playsinline preload="metadata" hidden></video>
-      <div class="upload" id="upload">
-        <div class="upload-icon"><svg><use href="#i-upload"/></svg></div>
-        <span class="drop-hint">or drop a video here</span>
-      </div>
+      <button type="button" class="upload" id="upload" aria-label="Choose video">
+        <span class="upload-icon"><svg aria-hidden="true"><use href="#i-upload"/></svg></span>
+        <span class="drop-hint">Choose or drop a video</span>
+      </button>
       <div class="processing" id="processing" hidden><span class="spinner"></span><span id="processing-label">Analyzing audio…</span><div class="progress-track"><div id="upload-progress"></div></div></div>
       <button class="stage-play" id="stage-play" aria-label="Play video" hidden><svg><use href="#i-play"/></svg></button>
       <button class="fullscreen-button" id="fullscreen" aria-label="Enter fullscreen" aria-pressed="false" title="Fullscreen" hidden><svg><use href="#i-fullscreen"/></svg></button>
