@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Cut the Silence</title>
+  <meta name="description" content="A minimal open-source video editor. Remove silence, adjust cuts, and export your video locally in your browser.">
+  <meta name="color-scheme" content="dark">
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" type="module"></script>
+</head>
+<body>
+  <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m-4 4 4-4 4 4M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="m8.2 8.2 12 12M8.2 15.8 20 4"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5zM16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M8 4 3 9l5 5M3 9h11a7 7 0 0 1 0 14"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="m16 4 5 5-5 5m5-5H10a7 7 0 0 0 0 14"/></symbol>
+    <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></symbol>
+    <symbol id="i-exit-fullscreen" viewBox="0 0 24 24"><path d="M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5"/></symbol>
+  </svg>
+  <main>
+    <input type="file" id="file" accept="video/*,.mkv,.mov,.avi,.m4v" hidden>
+
+    <section class="stage" id="stage" aria-label="Video preview">
+      <video id="video" playsinline preload="metadata" hidden></video>
+      <div class="upload" id="upload">
+        <div class="upload-icon"><svg><use href="#i-upload"/></svg></div>
+        <span class="drop-hint">or drop a video here</span>
+      </div>
+      <div class="processing" id="processing" hidden><span class="spinner"></span><span id="processing-label">Analyzing audio…</span><div class="progress-track"><div id="upload-progress"></div></div></div>
+      <button class="stage-play" id="stage-play" aria-label="Play video" hidden><svg><use href="#i-play"/></svg></button>
+      <button class="fullscreen-button" id="fullscreen" aria-label="Enter fullscreen" aria-pressed="false" title="Fullscreen" hidden><svg><use href="#i-fullscreen"/></svg></button>
+      <span class="preview-badge" id="preview-badge" hidden><span></span> Previewing cuts</span>
+      <span class="drop-cover">Drop video</span>
+    </section>
+
+    <section class="timeline-section" aria-label="Video timeline">
+      <div class="timeline-toolbar">
+        <div class="transport"><button class="icon-button play" id="play" aria-label="Play video" disabled><svg><use href="#i-play"/></svg></button><span class="time current" id="current">00:00.00</span><span class="time-divider">/</span><span class="time" id="duration">00:00.00</span><button class="current-clip" id="toggle-current" aria-label="Toggle current clip" disabled>Cut current clip</button><button class="icon-button" id="undo" aria-label="Undo edit" title="Undo (⌘Z / Ctrl+Z)" disabled><svg><use href="#i-undo"/></svg></button><button class="icon-button" id="redo" aria-label="Redo edit" title="Redo (⌘⇧Z / Ctrl+Shift+Z)" disabled><svg><use href="#i-redo"/></svg></button></div>
+        <div class="timeline-meta"><span id="cut-count">0 cuts</span><span class="meta-divider"></span><span class="cut-key"></span><span id="removed">0.00s removed</span></div>
+      </div>
+      <div class="timeline" id="timeline" tabindex="0" role="group" aria-label="Timeline. Tap audio or silence to keep or cut it. Drag cut edges to adjust; click the ruler to seek.">
+        <canvas id="waveform" aria-hidden="true"></canvas>
+        <div class="threshold-guide" id="threshold-upper" hidden><span></span></div><div class="threshold-guide" id="threshold-lower" hidden></div>
+        <div class="ruler" id="ruler" aria-hidden="true"></div>
+        <div class="cuts" id="cuts"></div>
+        <div class="playhead" id="playhead"><span></span></div>
+        <div class="empty-timeline" id="empty-timeline"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+      </div>
+      <div class="zoom-bar" id="zoom-bar" aria-label="Timeline zoom range">
+        <canvas id="overview" aria-hidden="true"></canvas>
+        <div class="zoom-window" id="zoom-window">
+          <button class="zoom-handle start" id="zoom-start" role="slider" aria-label="Timeline window start" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" disabled></button>
+          <div class="zoom-pan" id="zoom-pan" title="Drag to move the timeline window"></div>
+          <button class="zoom-handle end" id="zoom-end" role="slider" aria-label="Timeline window end" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" disabled></button>
+        </div>
+      </div>
+      <div class="inspector-row" id="inspector-row" hidden>
+        <div class="inspector" id="inspector" hidden>
+          <span class="selection-label" id="selection-label">Cut 1</span>
+          <button class="icon-button delete" id="delete" aria-label="Remove selected cut" title="Remove cut"><svg><use href="#i-trash"/></svg></button>
+        </div>
+      </div>
+    </section>
+
+    <details class="slider-group" id="slider-group" open>
+      <summary aria-label="Toggle sliders">Sliders <span aria-hidden="true">⌄</span></summary>
+    <section class="settings" aria-label="Silence detection settings">
+      <div class="setting">
+        <div class="setting-header"><label for="threshold"><svg><use href="#i-volume"/></svg>Silence level</label><output for="threshold" id="threshold-value">−35 <span>dB</span></output></div>
+        <input type="range" id="threshold" min="-60" max="-10" value="-35" step="1" disabled>
+        <div class="range-labels"><span>Quieter</span><span>Louder</span></div>
+      </div>
+      <div class="setting">
+        <div class="setting-header"><label for="silence"><svg><use href="#i-clock"/></svg>Cut pauses longer than</label><output for="silence" id="silence-value">0.50 <span>s</span></output></div>
+        <input type="range" id="silence" min="0.1" max="3" value="0.5" step="0.05" disabled>
+        <div class="range-labels"><span>0.1s</span><span>3s</span></div>
+      </div>
+      <div class="setting">
+        <div class="setting-header"><label for="minimum-audio"><svg><use href="#i-volume"/></svg>Remove clips shorter than</label><output for="minimum-audio" id="minimum-audio-value">0.00 <span>s</span></output></div>
+        <input type="range" id="minimum-audio" title="Remove whole clips between cuts. Short sounds inside longer clips stay." min="0" max="3" value="0" step="0.05" disabled>
+        <div class="range-labels"><span>0s</span><span>3s</span></div>
+      </div>
+      <div class="setting">
+        <div class="setting-header"><label for="padding">Padding around audio</label><output for="padding" id="padding-value">0.04 <span>s</span></output></div>
+        <input type="range" id="padding" min="0" max="1" value="0.04" step="0.01" disabled title="Keep this much space before and after surviving audio">
+        <div class="range-labels"><span>0s</span><span>1s</span></div>
+      </div>
+    </section>
+    </details>
+
+    <div class="error" id="error" role="alert" hidden></div>
+    <footer>
+      <div class="edit-actions">
+        <button class="clear-manual" id="clear-manual" disabled>Clear manual edits</button>
+      </div>
+      <div class="actions"><button class="secondary upload-control" id="replace"><svg><use href="#i-upload"/></svg><span>Upload video</span></button><button class="secondary" id="preview" disabled><svg><use href="#i-play"/></svg><span>Preview</span></button><button class="primary" id="render" disabled><svg><use href="#i-download"/></svg><span>Render</span></button><details class="advanced" id="advanced">
+      <summary role="button" aria-label="Advanced" aria-haspopup="true" aria-expanded="false">Advanced <span aria-hidden="true">⌄</span></summary>
+      <div class="advanced-actions">
+        <button class="secondary" id="preview-removed" disabled><svg><use href="#i-play"/></svg><span>Preview removed clips</span></button>
+        <button class="secondary" id="export-removed" disabled><svg><use href="#i-download"/></svg><span>Export removed clips</span></button>
+      </div>
+    </details></div>
+    </footer>
+    <div class="render-result" id="render-result" hidden><span><svg><use href="#i-check"/></svg><span id="result-label">Video ready</span></span><a id="download" download="edited-video.mp4">Download MP4 <svg><use href="#i-download"/></svg></a></div>
+
+  </main>
+</body>
+</html>

@@ -1,0 +1,6 @@
+.data/
+__pycache__/
+*.pyc
+editor-tested.jpg
+.DS_Store
+node_modules/
