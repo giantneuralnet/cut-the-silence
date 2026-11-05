@@ -5,7 +5,8 @@ import { detectRegions, applyOverrides, setOverride, resolveEdgeEdits, editMasks
 const $ = id => document.getElementById(id);
 const video = $('video');
 const browserMode=!['127.0.0.1','localhost','[::1]'].includes(location.hostname)||new URLSearchParams(location.search).has('browser');
-const browserBackend=browserMode?await import('./browser-backend.mjs?v=20261105-1'):null;
+let browserBackendPromise;
+const getBrowserBackend=()=>browserBackendPromise??=import('./browser-backend.mjs?v=20261105-1');
 const SESSION_KEY=browserMode?'cut-the-silence-browser-session':'video-editor-session';
 const state = {id:null,name:'',duration:0,levels:[],step:0.02,cuts:[],selected:null,
   preview:false,playbackMode:'edited',busy:false,followPlayback:true,history:[],future:[],viewStart:0,viewEnd:0,previewMode:null,regions:[],overrides:[],edgeEdits:[],autoRegions:[]};
@@ -254,10 +255,10 @@ $('play').onclick=togglePlay;$('stage-play').onclick=togglePlay;video.onclick=to
 $('preview').onclick=()=>{if(!video.paused&&state.playbackMode==='edited')playback.pause();else play(true,'edited');};
 $('preview-removed').onclick=()=>{if(!video.paused&&state.playbackMode==='removed')playback.pause();else play(true,'removed');};
 
-async function request(url,options) {if(browserBackend)return browserBackend.request(url,options);const response=await fetch(url,options),data=await response.json();if(!response.ok)throw new Error(data.error||'The request failed.');return data;}
+async function request(url,options) {if(browserMode)return (await getBrowserBackend()).request(url,options);const response=await fetch(url,options),data=await response.json();if(!response.ok)throw new Error(data.error||'The request failed.');return data;}
 function nativeHevc() {return !!video.canPlayType('video/mp4; codecs="hvc1.1.6.L153.B0"');}
 function uploadFile(file) {
-  if(browserBackend)return browserBackend.upload(file);
+  if(browserMode)return getBrowserBackend().then(backend=>backend.upload(file));
   return new Promise((resolve,reject)=>{
     const xhr=new XMLHttpRequest();xhr.open('POST','/api/upload');xhr.setRequestHeader('X-Filename',encodeURIComponent(file.name));xhr.setRequestHeader('X-Native-Hevc',nativeHevc()?'1':'0');
     xhr.upload.onprogress=e=>{if(e.lengthComputable)$('upload-progress').style.width=`${e.loaded/e.total*100}%`;};
