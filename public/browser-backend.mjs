@@ -1,6 +1,6 @@
 import { FFmpeg } from './vendor/ffmpeg/index.js';
 import { planExport, exportGraph } from './export-plan.mjs';
-import { analyzeNative, renderNative } from './native-backend.mjs';
+import { analyzeNative, renderNative } from './native-backend.mjs?v=20261105-1';
 
 const jobs=new Map();
 const MAX_SIZE=512*1024*1024;
@@ -160,7 +160,7 @@ async function render(job,body) {
     activeProgress=job;await execute(ffmpeg,args);activeProgress=null;
     const outputURL=URL.createObjectURL(new Blob([await ffmpeg.readFile(output)],{type:'video/mp4'}));
     rememberOutput(outputURL);
-    Object.assign(job,{status:'ready',progress:100,outputURL});
+    Object.assign(job,{status:'ready',progress:100,outputURL,processing:'wasm'});
   }catch(error){job.status='error';job.error=error.message||'Export failed. Try a shorter video or use the local app.';}
   finally {activeProgress=null;if(enginePromise)try{const ffmpeg=await enginePromise;for(const file of scratch)try{await ffmpeg.deleteFile(file);}catch{}}catch{}}
 }
