@@ -1,3 +1,4 @@
+import { clipExports, clipsZip } from './clip-export.mjs';
 import { rememberEdit, undoEdit, redoEdit, clearManualEdits } from './edit-history.mjs';
 import { CutPlayback, invertCuts } from './playback.mjs';
 import { detectRegions, applyOverrides, setOverride, resolveEdgeEdits, editMasks, timelineGesture, mergedAutomaticCuts, removeShortClips } from './timeline.mjs';
@@ -6,7 +7,7 @@ const $ = id => document.getElementById(id);
 const video = $('video');
 const browserMode=!['127.0.0.1','localhost','[::1]'].includes(location.hostname)||new URLSearchParams(location.search).has('browser');
 let browserBackendPromise;
-const getBrowserBackend=()=>browserBackendPromise??=import('./browser-backend.mjs?v=20261105-1');
+const getBrowserBackend=()=>browserBackendPromise??=import('./browser-backend.mjs?v=20261106-1');
 const SESSION_KEY=browserMode?'cut-the-silence-browser-session':'video-editor-session';
 const state = {id:null,name:'',duration:0,levels:[],step:0.02,cuts:[],selected:null,
   preview:false,playbackMode:'edited',busy:false,followPlayback:true,history:[],future:[],viewStart:0,viewEnd:0,previewMode:null,regions:[],overrides:[],edgeEdits:[],autoRegions:[]};
@@ -49,6 +50,7 @@ function refreshButtons() {
   const hasRemoved=removedDuration()>0.002;
   $('play').disabled=!ready||(state.playbackMode==='removed'?!hasRemoved:allCut);
   for(const id of ['preview-removed','export-removed'])$(id).disabled=!ready||!hasRemoved;
+  $('separate-clips').disabled=state.busy;
   $('replace').disabled=state.busy;$('undo').disabled=state.busy||(!state.history.length&&!state.edgeEdits.length);
   $('redo').disabled=state.busy||!state.future.length;
   $('clear-manual').disabled=state.busy||(!state.overrides.length&&!state.edgeEdits.length);
@@ -451,20 +453,47 @@ document.addEventListener('keydown',e=>{
   if((e.key==='Delete'||e.key==='Backspace')&&state.selected!==null){e.preventDefault();deleteCut();}
   if(e.key==='Escape'){selectCut(null);playback.pause();}
 });
+let clipDownloadURL=null;
+try {$('separate-clips').checked=localStorage.getItem('cut-the-silence-separate-clips')==='true';}catch{}
+$('separate-clips').onchange=()=>{
+  try {localStorage.setItem('cut-the-silence-separate-clips',String($('separate-clips').checked));}catch{}
+};
 async function exportVideo(mode='edited') {
   if(!state.id||state.busy)return;
   if(mode==='removed'&&removedDuration()<=0.002)return;
-  const button=$(mode==='removed'?'export-removed':'render');
+  const button=$(mode==='removed'?'export-removed':'render'),separate=$('separate-clips').checked;
+  const cuts=state.cuts.map(({start,end})=>({start,end}));
+  const exports=separate?clipExports(cuts,state.duration,mode):[{mode,cuts}];
+  if(!exports.length){message('There are no clips to export.');return;}
   playback.pause();message();state.busy=true;refreshButtons();$('render-result').hidden=true;
+  if(clipDownloadURL){URL.revokeObjectURL(clipDownloadURL);clipDownloadURL=null;}
   try {
-    const {id}=await request('/api/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:state.id,mode,cuts:state.cuts.map(({start,end})=>({start,end}))})});
-    let data;
-    do {
-      data=await request(`/api/jobs/${id}`);if(data.status==='error')throw new Error(data.error);
-      button.innerHTML=`<span class="button-spinner"></span><span>${Math.round(data.progress)}%</span>`;
-      if(data.status!=='ready')await delay(500);
-    }while(data.status!=='ready');
-    $('download').href=data.outputURL||`/media/${id}/output`;$('download').download=mode==='removed'?'removed-clips.mp4':'edited-video.mp4';$('result-label').textContent=mode==='removed'?'Removed clips ready':'Video ready';$('render-result').dataset.processing=data.processing||'server';$('render-result').hidden=false;$('download').click();
+    const files=[];let data,id;
+    for(let i=0;i<exports.length;i++) {
+      const item=exports[i];
+      ({id}=await request('/api/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:state.id,mode:item.mode,cuts:item.cuts})}));
+      do {
+        data=await request(`/api/jobs/${id}`);if(data.status==='error')throw new Error(data.error);
+        const progress=Math.round((i+data.progress/100)/exports.length*100);
+        button.innerHTML=`<span class="button-spinner"></span><span>${progress}%</span>`;
+        if(data.status!=='ready')await delay(500);
+      }while(data.status!=='ready');
+      if(separate) {
+        const response=await fetch(data.outputURL||`/media/${id}/output`);
+        if(!response.ok)throw new Error('Could not retrieve an exported clip. Try rendering again.');
+        files.push({filename:item.filename,blob:await response.blob()});
+      }
+    }
+    if(separate) {
+      clipDownloadURL=URL.createObjectURL(await clipsZip(files));
+      $('download').href=clipDownloadURL;$('download').download=mode==='removed'?'removed-clips.zip':'edited-clips.zip';
+      $('download').innerHTML='Download ZIP '+icon('download');
+      $('result-label').textContent=`${files.length} ${files.length===1?'clip':'clips'} ready`;
+    }else {
+      $('download').href=data.outputURL||`/media/${id}/output`;$('download').download=mode==='removed'?'removed-clips.mp4':'edited-video.mp4';
+      $('download').innerHTML='Download MP4 '+icon('download');$('result-label').textContent=mode==='removed'?'Removed clips ready':'Video ready';
+    }
+    $('render-result').dataset.processing=data.processing||'server';$('render-result').hidden=false;$('download').click();
   }catch(error){message(error.message);}
   finally{state.busy=false;button.innerHTML=icon('download')+`<span>${mode==='removed'?'Export removed clips':'Render'}</span>`;refreshButtons();}
 }

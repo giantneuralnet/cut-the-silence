@@ -63,7 +63,10 @@ to adjust offsets; those offsets follow detected boundaries as settings change.
 Pinch over the timeline to zoom, scroll with two fingers to pan, or use the zoom
 bar. Double-click the bar to show the full video. Space plays/pauses;
 Cmd/Ctrl+Z undoes and Cmd/Ctrl+Shift+Z redoes. Render downloads the edited MP4.
-Advanced contains removed-clip preview and export.
+Advanced contains removed-clip preview and export. Check **Export as separate
+clips** to export each continuous kept section (or each removed section from
+Advanced) as an individually numbered MP4 inside one ZIP download. Leave it
+unchecked to render a single joined MP4.
 
 ## Development and deployment
 
