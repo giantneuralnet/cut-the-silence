@@ -98,6 +98,60 @@ def encoding_options(width=1920, height=1080, fps=30, preview=False):
             "-crf", "24" if preview else "18", "-threads", str(min(8, os.cpu_count() or 4))]
 
 
+EXPORT_ENCODERS = {}
+
+def source_video_settings(source):
+    probe = json.loads(run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                            "-show_streams", "-of", "json", str(source)]).stdout)
+    video = probe["streams"][0]
+    try:
+        bitrate = int(video.get("bit_rate", 0))
+    except (ValueError, TypeError):
+        bitrate = 0
+    return {"codec": video["codec_name"], "bitrate": bitrate if bitrate > 0 else None,
+            "pixelFormat": video.get("pix_fmt") or "yuv420p"}
+
+
+def export_encoding_options(settings):
+    codec = settings["codec"]
+    encoders = {"h264": "libx264", "hevc": "libx265", "vp9": "libvpx-vp9", "av1": "libsvtav1"}
+    if codec not in encoders:
+        raise ValueError(f"Preserving the {codec} codec in MP4 is not supported.")
+    encoder = encoders[codec]
+    if codec == "h264" and ENCODER == "h264_videotoolbox":
+        encoder = ENCODER
+    elif codec == "hevc" and os.sys.platform == "darwin":
+        if codec not in EXPORT_ENCODERS:
+            try:
+                subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=size=320x240:rate=30",
+                                "-frames:v", "2", "-an", "-c:v", "hevc_videotoolbox", "-allow_sw", "0",
+                                "-b:v", "2M", "-f", "null", "-"], check=True, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=10)
+                EXPORT_ENCODERS[codec] = "hevc_videotoolbox"
+            except (subprocess.SubprocessError, OSError):
+                EXPORT_ENCODERS[codec] = "libx265"
+        encoder = EXPORT_ENCODERS[codec]
+    args = ["-c:v", encoder]
+    if "videotoolbox" in encoder:
+        args += ["-allow_sw", "0"]
+    elif codec in ("h264", "hevc"):
+        args += ["-preset", "veryfast", "-threads", str(min(8, os.cpu_count() or 4))]
+        if codec == "hevc":
+            args += ["-x265-params", "pools=2:frame-threads=2"]
+    if settings["bitrate"]:
+        args += ["-b:v", str(settings["bitrate"])]
+    elif "videotoolbox" in encoder:
+        args += ["-b:v", "10000000"]
+    else:
+        args += ["-crf", "18" if codec == "h264" else "23"]
+    if codec == "hevc":
+        args += ["-tag:v", "hvc1"]
+    # Retain 10-bit HEVC where possible; H.264 exports retain the existing 8-bit path.
+    ten_bit = codec == "hevc" and any(depth in settings["pixelFormat"] for depth in ("10", "12", "p010"))
+    pixel_format = ("p010le" if "videotoolbox" in encoder else "yuv420p10le") if ten_bit else "yuv420p"
+    return args + ["-pix_fmt", pixel_format], encoder
+
+
 def decoding_options():
     return ["-hwaccel", "videotoolbox"] if ENCODER == "h264_videotoolbox" else []
 
@@ -214,7 +268,7 @@ def analyze(key):
         rate = video.get("avg_frame_rate", "30/1").split("/")
         fps = float(rate[0]) / max(1, float(rate[1])) if len(rate) == 2 else 30
         patch_job(key, status="ready", progress=100, levels=levels, step=0.02,
-                  width=width, height=height, fps=fps)
+                  width=width, height=height, fps=fps, sourceVideo=source_video_settings(job["source"]))
         persist_job(key)
     except Exception as exc:
         patch_job(key, status="error", error=user_error(exc))
@@ -231,6 +285,8 @@ def render(key, output_key, cuts, mode="edited"):
         started = time.perf_counter()
         job = JOBS[key]
         duration = job["duration"]
+        settings = source_video_settings(job["source"])
+        export_options, export_encoder = export_encoding_options(settings)
         ordered = sorted(cuts, key=lambda c: c["start"])
         merged = []
         for cut in ordered:
@@ -278,8 +334,7 @@ def render(key, output_key, cuts, mode="edited"):
                 "-map", "[vfinal]"]
         if job["hasAudio"]:
             args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]
-        args += [*encoding_options(job.get("width",1920), job.get("height",1080), job.get("fps",30)),
-                 "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-progress", "pipe:1", str(output)]
+        args += [*export_options, "-movflags", "+faststart", "-progress", "pipe:1", str(output)]
         total = sum(b - a for a, b in keep)
         with tempfile.TemporaryFile() as errors:
             proc = start_process(args, stdout=subprocess.PIPE, stderr=errors, text=True)
@@ -300,7 +355,8 @@ def render(key, output_key, cuts, mode="edited"):
                 with LOCK:
                     PROCESSES.discard(proc)
         patch_job(output_key, status="ready", progress=100, output=output, duration=total,
-                  elapsedSeconds=round(time.perf_counter()-started, 2), encoder=ENCODER, mode=mode)
+                  elapsedSeconds=round(time.perf_counter()-started, 2), encoder=export_encoder, mode=mode,
+                  videoCodec=settings["codec"], targetVideoBitrate=settings["bitrate"])
         persist_job(output_key)
     except Exception as exc:
         patch_job(output_key, status="error", error=user_error(exc))

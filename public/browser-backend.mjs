@@ -1,6 +1,7 @@
+import { videoProfile, softwareVideoOptions } from './video-profile.mjs';
 import { FFmpeg } from './vendor/ffmpeg/index.js';
 import { planExport, exportGraph } from './export-plan.mjs';
-import { analyzeNative, renderNative } from './native-backend.mjs?v=20261105-1';
+import { analyzeNative, renderNative } from './native-backend.mjs?v=20261106-2';
 
 const jobs=new Map();
 const MAX_SIZE=512*1024*1024;
@@ -101,7 +102,7 @@ async function analyze(job) {
     if(!video||!Number.isFinite(duration)||duration<=0)throw new Error('Choose a file containing a video track.');
     const rotation=video.side_data_list?.find(s=>'rotation'in s)?.rotation||0;
     const rotated=Math.abs(rotation)%180===90;
-    Object.assign(job,{duration,hasAudio:audio,width:rotated?video.height:video.width,height:rotated?video.width:video.height,step:0.02,levels:[]});
+    Object.assign(job,{duration,hasAudio:audio,width:rotated?video.height:video.width,height:rotated?video.width:video.height,sourceVideoCodec:video.codec_name,sourceVideoBitrate:Number(video.bit_rate)||null,step:0.02,levels:[]});
     if(audio) {
       const pcmFile=`audio-${job.id}.pcm`;scratch.push(pcmFile);
       await execute(ffmpeg,['-i',source.input,'-map','0:a:0','-vn','-ac','1','-ar','8000','-f','s16le',pcmFile]);
@@ -152,15 +153,27 @@ async function render(job,body) {
     }catch{/* Try the software engine if the native codec is unavailable or fails. */}
     job.progress=0;job.phase='Exporting with compatibility engine…';
     const ffmpeg=await mountSource();
+    let codec=original.sourceVideoCodec,bitrate=original.sourceVideoBitrate;
+    // Older saved sessions did not record the source codec. Probe the original,
+    // never the preview proxy, before choosing an encoder.
+    if(!codec) {
+      const probeFile=`export-probe-${job.id}.json`;scratch.push(probeFile);
+      await ffmpeg.ffprobe(['-v','error','-select_streams','v:0','-show_streams','-of','json','-o',probeFile,source.input]);
+      const video=JSON.parse(await ffmpeg.readFile(probeFile,'utf8')).streams[0];
+      codec=video.codec_name;bitrate=Number(video.bit_rate)||null;
+    }
+    const profile=videoProfile(codec,bitrate);
     const filter=`filter-${job.id}.txt`,output=`export-${job.id}.mp4`;scratch.push(filter,output);
     await ffmpeg.writeFile(filter,new TextEncoder().encode(exportGraph(segments,original.hasAudio)));
     const args=['-i',source.input,'-filter_complex_threads','1','-filter_complex_script',filter,'-map','[vfinal]'];
     if(original.hasAudio)args.push('-map','[aout]','-c:a','aac','-b:a','192k');
-    args.push('-c:v','libx264','-preset','ultrafast','-crf','20','-threads','1','-pix_fmt','yuv420p','-movflags','+faststart',output);
-    activeProgress=job;await execute(ffmpeg,args);activeProgress=null;
+    args.push(...softwareVideoOptions(profile),'-threads','1','-pix_fmt','yuv420p','-movflags','+faststart',output);
+    activeProgress=job;
+    try{await execute(ffmpeg,args);}catch{throw new Error(`This browser cannot export the original ${profile.codec==='hevc'?'HEVC':profile.codec.toUpperCase()} codec. Use the local app to preserve it.`);}
+    activeProgress=null;
     const outputURL=URL.createObjectURL(new Blob([await ffmpeg.readFile(output)],{type:'video/mp4'}));
     rememberOutput(outputURL);
-    Object.assign(job,{status:'ready',progress:100,outputURL,processing:'wasm'});
+    Object.assign(job,{status:'ready',progress:100,outputURL,processing:'wasm',videoCodec:profile.codec,targetVideoBitrate:profile.bitrate});
   }catch(error){job.status='error';job.error=error.message||'Export failed. Try a shorter video or use the local app.';}
   finally {activeProgress=null;if(enginePromise)try{const ffmpeg=await enginePromise;for(const file of scratch)try{await ffmpeg.deleteFile(file);}catch{}}catch{}}
 }

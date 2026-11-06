@@ -14,7 +14,7 @@ A minimal, open-source video editor for removing silence and unwanted takes.
 ## Hosted editor
 
 The GitHub Pages version uses native WebCodecs for audio analysis and MP4 export
-when the browser supports the source codecs and H.264/AAC encoding. Video decoding
+when the browser supports decoding and encoding the source video codec plus AAC audio. Video decoding
 and encoding request hardware acceleration, including on supported iPhones.
 Safari 26 or newer exposes the audio WebCodecs needed for this path; device,
 codec and resolution support still vary, and the browser chooses the actual
@@ -45,7 +45,12 @@ Open **http://127.0.0.1:8000**. No Python or JavaScript package installation is
 needed. The local server uses VideoToolbox hardware encoding on supported Macs
 and software encoding elsewhere. Sources and renders are cached in `.data/`,
 which is excluded from Git. Preview copies are kept small; exports retain the
-original resolution.
+original resolution. Exports retain the source video codec (including HEVC) and
+target the source video bitrate when it is available. Bitrate is an encoder
+target, so the measured output average can differ after cuts and re-encoding.
+If the source does not declare a video bitrate, an encoder default is used.
+Browser codec support varies; an unsupported original codec produces an error
+with guidance to use the local app instead of silently converting to H.264.
 
 To try the browser-only implementation locally, open
 **http://127.0.0.1:8000/?browser** while the server is running, or serve `public/`

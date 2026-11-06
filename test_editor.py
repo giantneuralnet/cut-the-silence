@@ -127,6 +127,40 @@ class VideoPipelineTests(unittest.TestCase):
         video = next(s for s in probe["streams"] if s["codec_type"] == "video")
         self.assertEqual((video["width"], video["height"]), (360, 640))
 
+    def test_hevc_exports_keep_codec_and_original_bitrate_target(self):
+        source = self.source.parent / "hevc" / "source.mp4"
+        source.parent.mkdir()
+        server.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc2=size=320x180:rate=25:duration=3", "-c:v", "libx265",
+                    "-preset", "ultrafast", "-x265-params", "pools=2:frame-threads=2",
+                    "-b:v", "600k", "-tag:v", "hvc1", str(source)])
+        key = "test-hevc"
+        # Simulate a cached session saved before source codec metadata existed.
+        server.JOBS[key] = {"source": source, "status": "ready", "duration": 3, "hasAudio": False}
+        original = server.source_video_settings(source)
+        self.assertEqual(original["codec"], "hevc")
+        self.assertGreater(original["bitrate"], 0)
+        for mode in ("edited", "removed"):
+            out = "test-hevc-" + mode
+            server.JOBS[out] = {"status": "rendering"}
+            server.render(key, out, [{"start": 1, "end": 2}], mode)
+            job = server.JOBS[out]
+            self.assertEqual(job["status"], "ready", job.get("error"))
+            self.assertEqual(job["targetVideoBitrate"], original["bitrate"])
+            self.assertEqual(job["videoCodec"], "hevc")
+            probe = json.loads(server.run(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(job["output"])]).stdout)
+            video = probe["streams"][0]
+            self.assertEqual(video["codec_name"], "hevc")
+            self.assertEqual(video["codec_tag_string"], "hvc1")
+            self.assertEqual((video["width"], video["height"]), (320, 180))
+            self.assertEqual(video["r_frame_rate"], "25/1")
+
+    def test_h264_export_settings_target_source_bitrate(self):
+        options, encoder = server.export_encoding_options({"codec": "h264", "bitrate": 28632195, "pixelFormat": "yuv420p"})
+        self.assertEqual(options[options.index("-b:v")+1], "28632195")
+        self.assertNotIn("-crf", options)
+        self.assertIn(encoder, ("libx264", "h264_videotoolbox"))
+
     def test_supported_mov_preview_uses_lossless_remux_and_cache(self):
         source = self.source.parent / "remux" / "source.mov"
         source.parent.mkdir()

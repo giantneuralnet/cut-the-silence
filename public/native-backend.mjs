@@ -1,12 +1,17 @@
 import { Input, BlobSource, ALL_FORMATS, AudioSampleSink, VideoSampleSink,
   Output, BufferTarget, Mp4OutputFormat, AudioSampleSource, VideoSampleSource,
-  canEncodeAudio, canEncodeVideo, QUALITY_HIGH } from './vendor/mediabunny/mediabunny.mjs';
+  canEncodeAudio, canEncodeVideo, QUALITY_HIGH, Quality } from './vendor/mediabunny/mediabunny.mjs';
+
+import { videoProfile } from './video-profile.mjs';
 
 // Hardware acceleration is a preference; browsers decide which codec implementation to use.
 export const nativeAvailable=()=>typeof VideoEncoder!=='undefined'&&typeof VideoDecoder!=='undefined';
 export function sampleRange(timestamp,duration,start,end,offset=0) {
   const a=Math.max(timestamp,start),b=Math.min(timestamp+duration,end);
   return b>a?{start:a,end:b,timestamp:offset+a-start,duration:b-a}:null;
+}
+async function averageVideoBitrate(video) {
+  return await video.getAverageBitrate()||(await video.computePacketStats()).averageBitrate||null;
 }
 async function open(file) {
   const input=new Input({source:new BlobSource(file),formats:ALL_FORMATS});
@@ -37,6 +42,7 @@ export async function analyzeNative(file,job) {
       }finally{sample.close();}
     }
     return {duration,hasAudio:!!audio,width:await video.getDisplayWidth(),height:await video.getDisplayHeight(),step,
+      sourceVideoCodec:await video.getCodec(),sourceVideoBitrate:await averageVideoBitrate(video),
       levels:audio?Array.from(sums,(sum,i)=>Math.round(20*Math.log10(Math.max(Math.sqrt(sum/(counts[i]||1)),0.00001))*100)/100):[],processing:'native'};
   }finally{input.dispose();}
 }
@@ -47,10 +53,12 @@ export async function renderNative(file,segments,job) {
   try {
     job.phase='Checking native codecs…';
     const width=await video.getDisplayWidth(),height=await video.getDisplayHeight();
-    if(!await video.canDecode()||!await canEncodeVideo('avc',{width,height,quality:QUALITY_HIGH,hardwareAcceleration:'prefer-hardware'}))throw new Error('Native video codec unavailable.');
+    const profile=videoProfile(await video.getCodec(),await averageVideoBitrate(video));
+    const quality=profile.bitrate?new Quality({bitrate:profile.bitrate}):QUALITY_HIGH;
+    if(!await video.canDecode()||!await canEncodeVideo(profile.codec,{width,height,quality,hardwareAcceleration:'prefer-hardware'}))throw new Error('Native video codec unavailable.');
     if(audio&&(!await audio.canDecode()||!await canEncodeAudio('aac',{sampleRate:48000,numberOfChannels:Math.min(2,await audio.getNumberOfChannels())})))throw new Error('Native audio codec unavailable.');
     const target=new BufferTarget();output=new Output({format:new Mp4OutputFormat({fastStart:'in-memory'}),target});
-    const vSource=new VideoSampleSource({codec:'avc',quality:QUALITY_HIGH,hardwareAcceleration:'prefer-hardware',keyFrameInterval:2});
+    const vSource=new VideoSampleSource({codec:profile.codec,quality,hardwareAcceleration:'prefer-hardware',keyFrameInterval:2});
     // The source applies each decoded sample's rotation before encoding.
     output.addVideoTrack(vSource);
     const aSource=audio?new AudioSampleSource({codec:'aac',bitrate:192000,transform:{sampleRate:48000,numberOfChannels:Math.min(2,await audio.getNumberOfChannels())}}):null;
@@ -93,6 +101,7 @@ export async function renderNative(file,segments,job) {
       offset+=segment.end-segment.start;
     }
     job.phase='Finishing export…';vSource.close();aSource?.close();await output.finalize();
+    job.videoCodec=profile.codec;job.targetVideoBitrate=profile.bitrate;
     return new Blob([target.buffer],{type:'video/mp4'});
   }catch(error){if(output)try{await output.cancel();}catch{}throw error;}
   finally{input.dispose();}

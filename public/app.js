@@ -7,7 +7,7 @@ const $ = id => document.getElementById(id);
 const video = $('video');
 const browserMode=!['127.0.0.1','localhost','[::1]'].includes(location.hostname)||new URLSearchParams(location.search).has('browser');
 let browserBackendPromise;
-const getBrowserBackend=()=>browserBackendPromise??=import('./browser-backend.mjs?v=20261106-1');
+const getBrowserBackend=()=>browserBackendPromise??=import('./browser-backend.mjs?v=20261106-2');
 const SESSION_KEY=browserMode?'cut-the-silence-browser-session':'video-editor-session';
 const state = {id:null,name:'',duration:0,levels:[],step:0.02,cuts:[],selected:null,
   preview:false,playbackMode:'edited',busy:false,followPlayback:true,history:[],future:[],viewStart:0,viewEnd:0,previewMode:null,regions:[],overrides:[],edgeEdits:[],autoRegions:[]};
