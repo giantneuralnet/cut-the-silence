@@ -2,8 +2,8 @@ import { Input, BlobSource, ALL_FORMATS, AudioSampleSink, VideoSampleSink, Canva
   Output, BufferTarget, Mp4OutputFormat, AudioSampleSource, VideoSampleSource,
   canEncodeAudio, canEncodeVideo, QUALITY_HIGH, Quality } from './vendor/mediabunny/mediabunny.mjs';
 
-import { WIDTH as MOTION_WIDTH, HEIGHT as MOTION_HEIGHT, STEP as MOTION_STEP } from './motion.mjs?v=3';
-import { createMotionAnalyzer } from './motion-gpu.mjs?v=3';
+import { WIDTH as MOTION_WIDTH, HEIGHT as MOTION_HEIGHT, STEP as MOTION_STEP } from './motion.mjs?v=4';
+import { createMotionAnalyzer } from './motion-gpu.mjs?v=4';
 import { videoProfile } from './video-profile.mjs';
 
 // Hardware acceleration is a preference; browsers decide which codec implementation to use.

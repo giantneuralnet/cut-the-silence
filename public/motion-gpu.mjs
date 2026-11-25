@@ -1,6 +1,5 @@
-import {MotionAnalyzer,trackCPU,soften,WIDTH,HEIGHT,COLS,ROWS} from './motion.mjs?v=3';
-// One fragment tracks one patch. R32F input and RGBA32F output preserve the
-// same normalized-correlation arithmetic as the CPU fallback.
+import {MotionAnalyzer,differenceCPU,WIDTH,HEIGHT,COLS,ROWS} from './motion.mjs?v=4';
+// Each fragment sums fixed-position RGB differences within one 16x16 tile.
 export function createMotionAnalyzer() {
   let gl,program,target,framebuffer,vao,textures=[],shaders=[];
   const dispose=()=>{
@@ -21,46 +20,37 @@ export function createMotionAnalyzer() {
     void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0,1);}`));
     gl.attachShader(program,compile(gl.FRAGMENT_SHADER,`#version 300 es
     precision highp float;
-    uniform highp sampler2D a; uniform highp sampler2D b; uniform highp sampler2D c; uniform highp sampler2D d;
+    uniform highp sampler2D a; uniform highp sampler2D b;
+    uniform vec3 offset;
     out vec4 result;
-    float correlation(highp sampler2D first,highp sampler2D second,ivec2 p,ivec2 offset){
-      float sa=0.,sb=0.,aa=0.,bb=0.,ab=0.;
-      for(int y=-3;y<=3;y++)for(int x=-3;x<=3;x++){
-        float u=texelFetch(first,p+ivec2(x,y),0).r,v=texelFetch(second,p+ivec2(x,y)+offset,0).r;
-        sa+=u;sb+=v;aa+=u*u;bb+=v*v;ab+=u*v;
-      }
-      float va=aa-sa*sa/49.,vb=bb-sb*sb/49.;
-      if(va<.0049||vb<.0049)return -1.;
-      return (ab-sa*sb/49.)/sqrt(va*vb);
-    }
     void main(){
-      ivec2 p=ivec2(gl_FragCoord.xy)*8+8;
-      float zero=correlation(a,b,p,ivec2(0));
-      if(zero<.975)zero=max(zero,max(correlation(c,b,p,ivec2(0)),correlation(a,d,p,ivec2(0))));
-      float best=zero;ivec2 displacement=ivec2(0);
-      if(zero<.975)for(int y=-3;y<=3;y++)for(int x=-3;x<=3;x++){
-        float s=correlation(a,b,p,ivec2(x,y));if(s>best+.000001){best=s;displacement=ivec2(x,y);}
+      ivec2 origin=ivec2(gl_FragCoord.xy)*8;float sum=0.;
+      for(int y=0;y<16;y++)for(int x=0;x<16;x++){
+        ivec2 p=origin+ivec2(x,y);
+        vec3 change=abs(texelFetch(b,p,0).rgb-texelFetch(a,p,0).rgb-offset);
+        sum+=max(0.,max(change.r,max(change.g,change.b))-3./255.);
       }
-      result=vec4(vec2(displacement),best,zero);
+      result=vec4(sum*100./256.,0.,0.,1.);
     }`));
     gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(program));
     gl.useProgram(program);vao=gl.createVertexArray();gl.bindVertexArray(vao);
     const texture=()=>{const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);return t;};
-    textures=[texture(),texture(),texture(),texture()];
-    for(let i=0;i<4;i++){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.texImage2D(gl.TEXTURE_2D,0,gl.R32F,WIDTH,HEIGHT,0,gl.RED,gl.FLOAT,null);gl.uniform1i(gl.getUniformLocation(program,['a','b','c','d'][i]),i);}
+    textures=[texture(),texture()];
+    for(let i=0;i<2;i++){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,WIDTH,HEIGHT,0,gl.RGBA,gl.UNSIGNED_BYTE,null);gl.uniform1i(gl.getUniformLocation(program,['a','b'][i]),i);}
     target=texture();gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,COLS,ROWS,0,gl.RGBA,gl.FLOAT,null);
     framebuffer=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,framebuffer);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,target,0);
     if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw new Error('Incomplete motion framebuffer.');
     gl.viewport(0,0,COLS,ROWS);
-    const detector=new MotionAnalyzer((a,b)=>{
+    const detector=new MotionAnalyzer((a,b,offset)=>{
       try {
         if(!gl||gl.isContextLost())throw new Error('Motion context lost.');
-        for(const [i,data] of [a,b,soften(a),soften(b)].entries()){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,WIDTH,HEIGHT,gl.RED,gl.FLOAT,data);}
+        for(const [i,data] of [a,b].entries()){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,WIDTH,HEIGHT,gl.RGBA,gl.UNSIGNED_BYTE,data);}
+        gl.uniform3f(gl.getUniformLocation(program,'offset'),...offset.map(v=>v/255));
         gl.drawArrays(gl.TRIANGLES,0,3);
         const result=new Float32Array(COLS*ROWS*4);gl.readPixels(0,0,COLS,ROWS,gl.RGBA,gl.FLOAT,result);
         if(gl.getError()!==gl.NO_ERROR)throw new Error('Motion readback failed.');
-        return result;
-      }catch{dispose();detector.processing='cpu';detector.track=trackCPU;return trackCPU(a,b);}
+        return Float32Array.from({length:COLS*ROWS},(_,i)=>result[i*4]);
+      }catch{dispose();detector.processing='cpu';detector.compare=differenceCPU;return differenceCPU(a,b,offset);}
     });
     detector.processing='webgl';detector.dispose=dispose;return detector;
   }catch{dispose();return new MotionAnalyzer();}

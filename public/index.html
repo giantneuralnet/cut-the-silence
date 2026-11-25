@@ -6,8 +6,8 @@
   <title>Cut the Silence</title>
   <meta name="description" content="A minimal open-source video editor. Remove silence, adjust cuts, and export your video locally in your browser.">
   <meta name="color-scheme" content="dark">
-  <link rel="stylesheet" href="./style.css?v=20261125-3">
-  <script src="./app.js?v=20261125-3" type="module"></script>
+  <link rel="stylesheet" href="./style.css?v=20261125-4">
+  <script src="./app.js?v=20261125-4" type="module"></script>
 </head>
 <body>
   <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -98,9 +98,9 @@
     <div class="detection-toggle"><label><input type="checkbox" id="stillness-enabled">Cut stillness</label><span id="stillness-status" role="status" aria-live="polite"></span></div>
     <section class="settings stillness-settings" id="stillness-settings" aria-label="Stillness detection settings" hidden>
       <div class="setting">
-        <div class="setting-header"><label for="stillness-threshold">Stillness level</label><output for="stillness-threshold" id="stillness-threshold-value">0.50 <span>px/s</span></output></div>
-        <input type="range" id="stillness-threshold" min="0.1" max="10" value="0.5" step="0.1" disabled title="Cut when tracked movement stays below this speed, in analysis pixels per second. Lower values preserve subtler movement.">
-        <div class="range-labels"><span>Less movement</span><span>More movement</span></div>
+        <div class="setting-header"><label for="stillness-threshold">Stillness level</label><output for="stillness-threshold" id="stillness-threshold-value">2.50 <span>%</span></output></div>
+        <input type="range" id="stillness-threshold" min="0.1" max="10" value="2.5" step="0.1" disabled title="Cut when local pixel-color differences stay below this level. Lower values preserve smaller changes.">
+        <div class="range-labels"><span>Smaller changes</span><span>Larger changes</span></div>
       </div>
       <div class="setting">
         <div class="setting-header"><label for="stillness-minimum">Cut stillness longer than</label><output for="stillness-minimum" id="stillness-minimum-value">1.00 <span>s</span></output></div>

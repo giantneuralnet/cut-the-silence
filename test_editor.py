@@ -178,7 +178,7 @@ class VideoPipelineTests(unittest.TestCase):
         job = server.JOBS["test-motion"]
         self.assertEqual(job["stillnessStatus"], "ready", job.get("stillnessError"))
         self.assertEqual(job["status"], "ready")
-        self.assertEqual(job["stillnessVersion"], 3)
+        self.assertEqual(job["stillnessVersion"], 4)
         self.assertEqual(len(job["stillnessScores"]), 30)
         self.assertLess(max(job["stillnessScores"][1:4]), .1)
         self.assertGreater(min(job["stillnessScores"][12:17]), .8)

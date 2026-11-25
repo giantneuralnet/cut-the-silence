@@ -275,7 +275,7 @@ def analyze(key):
 
 
 MOTION_STEP = 0.2
-MOTION_VERSION = 3
+MOTION_VERSION = 4
 
 
 def analyze_stillness(key):
@@ -286,7 +286,7 @@ def analyze_stillness(key):
         if not node:
             raise ValueError("Stillness detection needs Node.js 18+ on PATH. Install Node.js and restart the local server.")
         decoder = start_process(["ffmpeg", "-v", "error", *decoding_options(), "-i", str(job["source"]),
-                                 "-map", "0:v:0", "-an", "-vf", "fps=5:start_time=0,scale=320:180",
+                                 "-map", "0:v:0", "-an", "-vf", "fps=5:start_time=0,scale=640:360",
                                  "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"],
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         tracker = start_process([node, str(ROOT / "motion-cli.mjs"), str(job["duration"])],
@@ -300,7 +300,7 @@ def analyze_stillness(key):
             else:
                 result = data
         if tracker.wait() != 0 or decoder.wait() != 0 or result is None:
-            raise ValueError("Couldn't track motion in this video. Try another format.")
+            raise ValueError("Couldn't compare frames in this video. Try another format.")
         patch_job(key, stillnessStatus="ready", stillnessProgress=100, **result)
         persist_job(key)
     except Exception as exc:

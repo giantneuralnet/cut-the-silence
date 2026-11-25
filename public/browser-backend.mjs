@@ -1,9 +1,9 @@
-import { WIDTH as MOTION_WIDTH, HEIGHT as MOTION_HEIGHT, VERSION as MOTION_VERSION } from './motion.mjs?v=3';
-import { createMotionAnalyzer } from './motion-gpu.mjs?v=3';
+import { WIDTH as MOTION_WIDTH, HEIGHT as MOTION_HEIGHT, VERSION as MOTION_VERSION } from './motion.mjs?v=4';
+import { createMotionAnalyzer } from './motion-gpu.mjs?v=4';
 import { videoProfile, softwareVideoOptions } from './video-profile.mjs';
 import { FFmpeg } from './vendor/ffmpeg/index.js';
 import { planExport, exportGraph } from './export-plan.mjs';
-import { analyzeNative, renderNative, analyzeStillnessNative } from './native-backend.mjs?v=20261125-3';
+import { analyzeNative, renderNative, analyzeStillnessNative } from './native-backend.mjs?v=20261125-4';
 
 const jobs=new Map();
 const MAX_SIZE=512*1024*1024;
@@ -148,7 +148,7 @@ async function analyzeStillness(job) {
         onProgress=({time})=>{job.stillnessProgress=Math.min(99,(start+time/1e6)/job.duration*100);};
         ffmpeg.on('progress',onProgress);
         try {
-          await execute(ffmpeg,['-ss',String(start),'-i',source.input,'-t',String(length),'-map','0:v:0','-an','-vf','fps=5:start_time=0,scale=320:180',
+          await execute(ffmpeg,['-ss',String(start),'-i',source.input,'-t',String(length),'-map','0:v:0','-an','-vf','fps=5:start_time=0,scale=640:360',
             '-pix_fmt','rgb24','-f','rawvideo',raw]);
           const bytes=await ffmpeg.readFile(raw),count=Math.ceil(length/.2);
           if(bytes.length<size)throw new Error('No video frames were decoded.');

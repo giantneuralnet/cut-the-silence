@@ -33,7 +33,7 @@ Use the local version for larger recordings and hardware-accelerated export.
 
 ## Run locally
 
-Requires Python 3.10+, Node.js 18+ (for stillness tracking), and `ffmpeg` / `ffprobe` on PATH. On macOS:
+Requires Python 3.10+, Node.js 18+ (for stillness analysis), and `ffmpeg` / `ffprobe` on PATH. On macOS:
 
 ```sh
 brew install ffmpeg node
@@ -67,46 +67,41 @@ surviving audio. Explicitly kept sections override automatic removal.
 Enable **Cut stillness** to remove visually still stretches even when audio is
 playing. Disable **Cut silence** to make automatic cuts depend only on motion,
 or leave both enabled to cut either kind of inactivity. Stillness level is the
-maximum tracked speed in analysis pixels per second: lower it to preserve
-subtler movement. Cut stillness longer than sets the minimum stationary duration.
+maximum local pixel-color difference as a percentage: lower it to preserve
+smaller changes. Cut stillness longer than sets the minimum stationary duration.
 Padding around movement retains footage before and after movement. The first
 use analyzes the video; results are cached, so slider changes are immediate.
-Manual keeps, cuts, and boundary adjustments take precedence. Older motion
-analysis is automatically replaced; the old percentage threshold is reset to
-0.5 px/s because the units have changed.
+Manual keeps, cuts, and boundary adjustments take precedence. Older analysis is
+replaced automatically, and the former pixels-per-second threshold resets to
+2.5% because the units have changed. Other settings and manual edits are retained.
 
-### Motion detector
+### Frame difference detector
 
-The detector tracks 7×7 patches using zero-mean normalized cross correlation
-(ZNCC), at 320×180 resolution and 5 samples per second. It searches for local
-translation, compares 0.2-second and 1-second baselines, and accepts either neighboring
-patches that agree or one reliable patch moving consistently across three
-consecutive observations. Confirmed movement is kept from its observed onset,
-including the earlier frames used to establish consistency. The longer comparison captures small gradual displacement.
-Brightness/contrast normalization, mild denoising, and stationary comparisons
-at different blur levels reduce exposure and focus false positives. Flat or
-isolated unstable patches do not establish movement. Widespread tracking
-failure is kept conservatively. Temporal confirmation can retain up to 1.4 extra seconds around slow movement,
-in addition to padding. Displacement remains measured in whole analysis pixels.
+The detector compares RGB colors at fixed pixel positions at 640×360 resolution
+and 5 samples per second. Each frame is compared with frames 0.2, 0.6, and 1 second
+earlier, so gradual changes can accumulate. Overlapping 16×16 regions prevent a
+small moving gripper from being averaged away by an unchanged background. The
+largest regional mean difference across those comparisons becomes the score.
+There is no object tracking or motion-speed estimation.
 
-In browsers the patch search runs through WebGL 2 when floating-point render
-targets are available; it falls back to the same CPU algorithm if unavailable
-or if the graphics context is lost. WebCodecs independently requests hardware
-video decoding. The local Python server streams FFmpeg frames to the shared
-Node.js CPU tracker. Compatibility decoding processes ten-second chunks to
-bound raw-frame memory. No footage is uploaded by the hosted editor.
+A mild 3×3 blur, a three-intensity-step noise floor, and subtraction of a median
+global brightness shift suppress compression noise and uniform exposure changes.
+RGB comparisons retain color changes as well as brightness changes. Movement
+can leave up to one second of retained footage after it stops because of the
+longer comparison, in addition to user-selected padding. There is no temporal
+confirmation that backfills earlier still footage.
 
-This is a lightweight implementation of normalized patch correspondence, not
-a bundled OpenCV or neural optical-flow model. We considered
-[DIS optical flow](https://docs.opencv.org/4.13.0/de/d4f/classcv_1_1DISOpticalFlow.html),
-[RAFT](https://arxiv.org/abs/2003.12039), and
-[CUDA Lucas–Kanade](https://docs.opencv.org/doc/doxygen/html/d7/d05/classcv_1_1cuda_1_1SparsePyrLKOpticalFlow.html).
-ZNCC was chosen for a small, portable browser implementation with intensity
-normalization ([research](https://arxiv.org/abs/1810.04320),
-[correlation definition](https://legacy-docs.opencv.org/4.x/df/dfb/group__imgproc__object.html)).
-It is not immune to strong shadows, severe blur, repeating patterns, or tiny
-untextured objects. Camera motion also counts as movement. Review the removed
-preview for critical footage; lower the threshold or keep a section manually.
+Browsers calculate regional differences with WebGL 2 when floating-point render
+targets are available, with CPU fallback if unavailable or the context is lost.
+WebCodecs independently requests hardware video decoding. The local server
+pipelines FFmpeg decoding and shared Node.js CPU analysis in separate processes.
+Compatibility decoding processes ten-second chunks to bound raw-frame memory.
+No footage is uploaded by the hosted editor.
+
+Local shadows, focus changes, and camera movement can still count as visual
+changes. Events shorter than the 0.2-second sampling interval can be missed.
+Review the removed preview for critical footage; lower the threshold or keep a
+section manually.
 
 Tap a section or use Keep/Cut current clip under the playhead. Drag cut boundaries
 to adjust offsets; those offsets follow detected boundaries as settings change.
