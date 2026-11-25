@@ -161,6 +161,41 @@ class VideoPipelineTests(unittest.TestCase):
         self.assertNotIn("-crf", options)
         self.assertIn(encoder, ("libx264", "h264_videotoolbox"))
 
+    def test_stillness_analysis_uses_video_regardless_of_audio(self):
+        folder = self.source.parent / "motion"
+        folder.mkdir()
+        source = folder / "source.mp4"
+        # Loud stationary footage for 2 s, silent moving footage for 2 s,
+        # then loud stationary footage again. Motion analysis must ignore sound.
+        server.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=blue:size=320x180:rate=20:duration=2",
+                    "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=20:duration=2",
+                    "-f", "lavfi", "-i", "color=blue:size=320x180:rate=20:duration=2",
+                    "-f", "lavfi", "-i", "aevalsrc=if(between(t\\,2\\,4)\\,0\\,0.3*sin(2*PI*440*t)):s=8000:d=6",
+                    "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]", "-map", "[v]", "-map", "3:a",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-c:a", "aac", str(source)])
+        server.JOBS["test-motion"] = {"status": "ready", "source": source, "duration": 6}
+        server.analyze_stillness("test-motion")
+        job = server.JOBS["test-motion"]
+        self.assertEqual(job["stillnessStatus"], "ready", job.get("stillnessError"))
+        self.assertEqual(job["status"], "ready")
+        self.assertEqual(job["stillnessVersion"], 1)
+        self.assertEqual(len(job["stillnessScores"]), 60)
+        self.assertLess(max(job["stillnessScores"][1:17]), .1)
+        self.assertGreater(min(job["stillnessScores"][22:37]), .8)
+        self.assertLess(max(job["stillnessScores"][42:57]), .1)
+        # The same series is produced when the source has no audio track.
+        no_audio = folder / "no-audio.mp4"
+        server.run(["ffmpeg", "-v", "error", "-y", "-i", str(source), "-an", "-c:v", "copy", str(no_audio)])
+        server.JOBS["test-motion-no-audio"] = {"status": "ready", "source": no_audio, "duration": 6}
+        server.analyze_stillness("test-motion-no-audio")
+        self.assertEqual(job["stillnessScores"], server.JOBS["test-motion-no-audio"]["stillnessScores"])
+
+    def test_stillness_analysis_failure_preserves_ready_video(self):
+        server.JOBS["test-motion-error"] = {"status": "ready", "source": self.source.parent/"missing.mp4", "duration": 1}
+        server.analyze_stillness("test-motion-error")
+        self.assertEqual(server.JOBS["test-motion-error"]["stillnessStatus"], "error")
+        self.assertEqual(server.JOBS["test-motion-error"]["status"], "ready")
+
     def test_supported_mov_preview_uses_lossless_remux_and_cache(self):
         source = self.source.parent / "remux" / "source.mov"
         source.parent.mkdir()

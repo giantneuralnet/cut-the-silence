@@ -5,6 +5,7 @@ A minimal, open-source video editor for removing silence and unwanted takes.
 **[Open the editor](https://giantneuralnet.github.io/cut-the-silence/)**
 
 - Silence detection with threshold, pause length, minimum clip length, and padding.
+- Optional stillness cuts based on video motion, with their own threshold, duration, and padding.
 - Green sections are kept. Tap sections to keep or remove them; drag cut edges.
 - Timeline zoom, trackpad pan/pinch, fullscreen preview, and a playhead clip toggle.
 - Undo, redo, and clear-manual-edits controls. Manual choices survive slider changes.
@@ -62,6 +63,16 @@ Silence level classifies audio. Cut pauses longer than removes long pauses;
 Remove clips shorter than removes whole remaining clips between cuts, not
 individual sounds inside longer speech. Padding keeps space on both sides of
 surviving audio. Explicitly kept sections override automatic removal.
+
+Enable **Cut stillness** to remove visually still stretches even when audio is
+playing. Disable **Cut silence** to make automatic cuts depend only on motion,
+or leave both enabled to cut either kind of inactivity. Stillness level is the
+maximum allowed frame change: raise it to cut more movement. Cut stillness longer
+than sets the minimum stationary duration. Padding around movement retains a
+little still footage before and after movement. Motion is sampled every 0.1 s at
+low resolution, so very brief or subtle movements may need a lower threshold.
+The first use analyzes the video; results are cached, so slider changes are
+immediate. Existing manual keeps, cuts, and boundary adjustments take precedence.
 
 Tap a section or use Keep/Cut current clip under the playhead. Drag cut boundaries
 to adjust offsets; those offsets follow detected boundaries as settings change.

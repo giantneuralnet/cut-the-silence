@@ -1,7 +1,8 @@
+import { MOTION_WIDTH, MOTION_HEIGHT, MOTION_STEP, frameChange } from './stillness.mjs';
 import { videoProfile, softwareVideoOptions } from './video-profile.mjs';
 import { FFmpeg } from './vendor/ffmpeg/index.js';
 import { planExport, exportGraph } from './export-plan.mjs';
-import { analyzeNative, renderNative } from './native-backend.mjs?v=20261106-2';
+import { analyzeNative, renderNative, analyzeStillnessNative } from './native-backend.mjs?v=20261125-1';
 
 const jobs=new Map();
 const MAX_SIZE=512*1024*1024;
@@ -17,7 +18,8 @@ function database() {
   });
   return dbPromise;
 }
-async function cacheSource(job,previewBlob=null) {
+async function cacheSource(job,previewBlob=source.previewBlob||null) {
+  source.previewBlob=previewBlob;
   const file=source.file;
   try {
     const db=await database(),data={...job};delete data.previewURL;
@@ -33,7 +35,7 @@ async function restoreSource(id) {
     const db=await database();
     const saved=await new Promise((resolve,reject)=>{const request=db.transaction('media').objectStore('media').get('last');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
     if(saved?.id!==id)return null;
-    source={id,file:saved.file,input:null};
+    source={id,file:saved.file,input:null,previewBlob:saved.previewBlob};
     const job={...saved.job,previewURL:URL.createObjectURL(saved.previewBlob||saved.file)};
     jobs.set(id,job);return job;
   }catch{return null;}
@@ -129,6 +131,34 @@ async function analyze(job) {
     if(enginePromise)try{const ffmpeg=await enginePromise;for(const file of scratch)try{await ffmpeg.deleteFile(file);}catch{}}catch{}
   }
 }
+async function analyzeStillness(job) {
+  let ffmpeg,raw,onProgress;
+  try {
+    let analysis;
+    try {analysis=await analyzeStillnessNative(source.file,job);}
+    catch {
+      ffmpeg=await mountSource();raw=`motion-${job.id}.rgb`;
+      onProgress=({time})=>{job.stillnessProgress=Math.min(95,time/1e6/job.duration*100);};
+      ffmpeg.on('progress',onProgress);
+      await execute(ffmpeg,['-i',source.input,'-map','0:v:0','-an','-vf','fps=10:start_time=0,scale=64:36',
+        '-pix_fmt','rgb24','-f','rawvideo',raw]);
+      const bytes=await ffmpeg.readFile(raw),size=MOTION_WIDTH*MOTION_HEIGHT*3,scores=[];
+      if(bytes.length<size)throw new Error('No video frames were decoded.');
+      for(let i=size;i+size<=bytes.length;i+=size) {
+        scores.push(frameChange(bytes.subarray(i-size,i),bytes.subarray(i,i+size)));
+        if(scores.length%300===0)await new Promise(resolve=>setTimeout(resolve,0));
+      }
+      scores.push(scores.at(-1)??100);
+      const count=Math.ceil(job.duration/MOTION_STEP);
+      while(scores.length<count)scores.push(100);
+      analysis={stillnessScores:scores.slice(0,count),stillnessStep:MOTION_STEP,stillnessVersion:1,stillnessProcessing:'wasm'};
+    }
+    Object.assign(job,analysis,{stillnessStatus:'ready',stillnessProgress:100});
+    await cacheSource(job);
+  }catch(error){job.stillnessStatus='error';job.stillnessError=error.message||'Could not analyze stillness.';}
+  finally{if(ffmpeg){if(onProgress)ffmpeg.off('progress',onProgress);if(raw)try{await ffmpeg.deleteFile(raw);}catch{}}}
+}
+
 export async function upload(file) {
   if(file.size>MAX_SIZE)throw new Error('Browser processing supports files up to 512 MB. Use the local app for larger videos (see the GitHub README).');
   for(const job of jobs.values())if(job.previewURL)URL.revokeObjectURL(job.previewURL);
@@ -187,6 +217,14 @@ export async function request(url,options) {
   if(url==='/api/preview') {
     const job=jobs.get(body.id);if(!job)throw new Error('Choose the video again to continue.');
     job.previewStatus='ready';return {id:body.id};
+  }
+  if(url==='/api/stillness') {
+    const job=jobs.get(body.id);
+    if(!job||job.status!=='ready'||source?.id!==body.id)throw new Error('Choose the video again to analyze stillness.');
+    if(job.stillnessStatus!=='analyzing'&&!(job.stillnessStatus==='ready'&&job.stillnessVersion===1)) {
+      Object.assign(job,{stillnessStatus:'analyzing',stillnessProgress:0,stillnessError:null});analyzeStillness(job);
+    }
+    return {id:body.id};
   }
   if(url==='/api/render') {
     const id=crypto.randomUUID(),job={id,status:'rendering',progress:0};jobs.set(id,job);render(job,body);return {id};

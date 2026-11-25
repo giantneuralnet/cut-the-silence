@@ -6,8 +6,8 @@
   <title>Cut the Silence</title>
   <meta name="description" content="A minimal open-source video editor. Remove silence, adjust cuts, and export your video locally in your browser.">
   <meta name="color-scheme" content="dark">
-  <link rel="stylesheet" href="./style.css?v=20261106-2">
-  <script src="./app.js?v=20261106-2" type="module"></script>
+  <link rel="stylesheet" href="./style.css?v=20261125-1">
+  <script src="./app.js?v=20261125-1" type="module"></script>
 </head>
 <body>
   <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -46,7 +46,7 @@
         <div class="transport"><button class="icon-button play" id="play" aria-label="Play video" disabled><svg><use href="#i-play"/></svg></button><span class="time current" id="current">00:00.00</span><span class="time-divider">/</span><span class="time" id="duration">00:00.00</span><button class="current-clip" id="toggle-current" aria-label="Toggle current clip" disabled>Cut current clip</button><button class="icon-button" id="undo" aria-label="Undo edit" title="Undo (⌘Z / Ctrl+Z)" disabled><svg><use href="#i-undo"/></svg></button><button class="icon-button" id="redo" aria-label="Redo edit" title="Redo (⌘⇧Z / Ctrl+Shift+Z)" disabled><svg><use href="#i-redo"/></svg></button></div>
         <div class="timeline-meta"><span id="cut-count">0 cuts</span><span class="meta-divider"></span><span class="cut-key"></span><span id="removed">0.00s removed</span></div>
       </div>
-      <div class="timeline" id="timeline" tabindex="0" role="group" aria-label="Timeline. Tap audio or silence to keep or cut it. Drag cut edges to adjust; click the ruler to seek.">
+      <div class="timeline" id="timeline" tabindex="0" role="group" aria-label="Timeline. Tap a section to keep or cut it. Drag cut edges to adjust; click the ruler to seek.">
         <canvas id="waveform" aria-hidden="true"></canvas>
         <div class="threshold-guide" id="threshold-upper" hidden><span></span></div><div class="threshold-guide" id="threshold-lower" hidden></div>
         <div class="ruler" id="ruler" aria-hidden="true"></div>
@@ -72,6 +72,7 @@
 
     <details class="slider-group" id="slider-group" open>
       <summary aria-label="Toggle sliders">Sliders <span aria-hidden="true">⌄</span></summary>
+    <div class="detection-toggle"><label><input type="checkbox" id="silence-enabled" checked>Cut silence</label></div>
     <section class="settings" aria-label="Silence detection settings">
       <div class="setting">
         <div class="setting-header"><label for="threshold"><svg><use href="#i-volume"/></svg>Silence level</label><output for="threshold" id="threshold-value">−35 <span>dB</span></output></div>
@@ -92,6 +93,24 @@
         <div class="setting-header"><label for="padding">Padding around audio</label><output for="padding" id="padding-value">0.04 <span>s</span></output></div>
         <input type="range" id="padding" min="0" max="1" value="0.04" step="0.01" disabled title="Keep this much space before and after surviving audio">
         <div class="range-labels"><span>0s</span><span>1s</span></div>
+      </div>
+    </section>
+    <div class="detection-toggle"><label><input type="checkbox" id="stillness-enabled">Cut stillness</label><span id="stillness-status" role="status" aria-live="polite"></span></div>
+    <section class="settings stillness-settings" id="stillness-settings" aria-label="Stillness detection settings" hidden>
+      <div class="setting">
+        <div class="setting-header"><label for="stillness-threshold">Stillness level</label><output for="stillness-threshold" id="stillness-threshold-value">0.80 <span>%</span></output></div>
+        <input type="range" id="stillness-threshold" min="0.05" max="10" value="0.8" step="0.05" disabled title="Cut when frame change stays below this level. Higher values allow more movement.">
+        <div class="range-labels"><span>Less movement</span><span>More movement</span></div>
+      </div>
+      <div class="setting">
+        <div class="setting-header"><label for="stillness-minimum">Cut stillness longer than</label><output for="stillness-minimum" id="stillness-minimum-value">1.00 <span>s</span></output></div>
+        <input type="range" id="stillness-minimum" min="0.2" max="10" value="1" step="0.1" disabled>
+        <div class="range-labels"><span>0.2s</span><span>10s</span></div>
+      </div>
+      <div class="setting">
+        <div class="setting-header"><label for="stillness-padding">Padding around movement</label><output for="stillness-padding" id="stillness-padding-value">0.15 <span>s</span></output></div>
+        <input type="range" id="stillness-padding" min="0" max="2" value="0.15" step="0.05" disabled title="Keep this much still footage before and after movement.">
+        <div class="range-labels"><span>0s</span><span>2s</span></div>
       </div>
     </section>
     </details>

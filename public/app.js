@@ -1,3 +1,4 @@
+import { stillnessRegions, combineDetections } from './stillness.mjs';
 import { clipExports, clipsZip } from './clip-export.mjs';
 import { rememberEdit, undoEdit, redoEdit, clearManualEdits } from './edit-history.mjs';
 import { CutPlayback, invertCuts } from './playback.mjs';
@@ -7,9 +8,9 @@ const $ = id => document.getElementById(id);
 const video = $('video');
 const browserMode=!['127.0.0.1','localhost','[::1]'].includes(location.hostname)||new URLSearchParams(location.search).has('browser');
 let browserBackendPromise;
-const getBrowserBackend=()=>browserBackendPromise??=import('./browser-backend.mjs?v=20261106-2');
+const getBrowserBackend=()=>browserBackendPromise??=import('./browser-backend.mjs?v=20261125-1');
 const SESSION_KEY=browserMode?'cut-the-silence-browser-session':'video-editor-session';
-const state = {id:null,name:'',duration:0,levels:[],step:0.02,cuts:[],selected:null,
+const state = {id:null,name:'',duration:0,levels:[],step:0.02,stillnessScores:null,stillnessStep:0.1,cuts:[],selected:null,
   preview:false,playbackMode:'edited',busy:false,followPlayback:true,history:[],future:[],viewStart:0,viewEnd:0,previewMode:null,regions:[],overrides:[],edgeEdits:[],autoRegions:[]};
 let cutId=0,drag=null,zoomDrag=null,frame=0,saveTimer=null,fallbackAttempted=false;
 const icon = name => `<svg><use href="#i-${name}"/></svg>`;
@@ -37,6 +38,8 @@ function writeSession() {
   if(!state.id)return;
   try {localStorage.setItem(SESSION_KEY,JSON.stringify({id:state.id,name:state.name,
     threshold:$('threshold').value,silence:$('silence').value,minimumAudio:$('minimum-audio').value,padding:$('padding').value,
+    silenceEnabled:$('silence-enabled').checked,stillnessEnabled:$('stillness-enabled').checked,
+    stillnessThreshold:$('stillness-threshold').value,stillnessMinimum:$('stillness-minimum').value,stillnessPadding:$('stillness-padding').value,
     overrides:state.overrides,edgeEdits:state.edgeEdits,history:state.history,future:state.future,viewStart:state.viewStart,viewEnd:state.viewEnd}));}catch{}
 }
 function saveSession() {clearTimeout(saveTimer);if(state.id)saveTimer=setTimeout(writeSession,150);}
@@ -45,7 +48,11 @@ function remember() {rememberEdit(state);}
 function dirty() {$('render-result').hidden=true;saveSession();}
 function refreshButtons() {
   const ready=!!state.id&&!state.busy,allCut=removedDuration()>=state.duration-0.002;
-  for(const id of ['threshold','silence','minimum-audio','padding','zoom-start','zoom-end'])$(id).disabled=!ready;
+  for(const id of ['threshold','silence','minimum-audio','padding'])$(id).disabled=!ready||!$('silence-enabled').checked;
+  for(const id of ['zoom-start','zoom-end'])$(id).disabled=!ready;
+  for(const id of ['silence-enabled','stillness-enabled'])$(id).disabled=state.busy;
+  for(const id of ['stillness-threshold','stillness-minimum','stillness-padding'])$(id).disabled=!ready||!$('stillness-enabled').checked||!state.stillnessScores;
+  $('stillness-settings').hidden=!$('stillness-enabled').checked;
   for(const id of ['preview','render'])$(id).disabled=!ready||allCut;
   const hasRemoved=removedDuration()>0.002;
   $('play').disabled=!ready||(state.playbackMode==='removed'?!hasRemoved:allCut);
@@ -71,27 +78,32 @@ function updateCurrentClip() {
   button.title=clip?`${time(clip.start)} → ${time(clip.end)}`:'Toggle the section at the playhead';
 }
 function syncSliders() {
-  for(const id of ['threshold','silence','minimum-audio','padding']) {const e=$(id);e.style.setProperty('--fill',`${(e.value-e.min)/(e.max-e.min)*100}%`);}
+  for(const id of ['threshold','silence','minimum-audio','padding','stillness-threshold','stillness-minimum','stillness-padding']) {const e=$(id);e.style.setProperty('--fill',`${(e.value-e.min)/(e.max-e.min)*100}%`);}
   $('threshold-value').innerHTML=`−${Math.abs(Number($('threshold').value))} <span>dB</span>`;
   $('silence-value').innerHTML=`${Number($('silence').value).toFixed(2)} <span>s</span>`;
   $('minimum-audio-value').innerHTML=`${Number($('minimum-audio').value).toFixed(2)} <span>s</span>`;
   $('padding-value').innerHTML=`${Number($('padding').value).toFixed(2)} <span>s</span>`;
+  for(const id of ['stillness-threshold','stillness-minimum','stillness-padding'])$(id+'-value').innerHTML=`${Number($(id).value).toFixed(2)} <span>${id==='stillness-threshold'?'%':'s'}</span>`;
 }
+const minimumClip=()=>$('silence-enabled').checked?Number($('minimum-audio').value):0;
+const regionName=region=>({audio:'Audio',silence:'Silence',stillness:'Stillness',motion:'Movement'}[region.kind]||'Clip');
 function rebuildRegions(selectionTime=null) {
-  state.regions=removeShortClips(applyOverrides(state.autoRegions,editMasks(state.autoRegions,state.overrides,state.edgeEdits,state.duration,Number($('minimum-audio').value))),Number($('minimum-audio').value)).map(region=>({...region,id:++cutId}));
+  state.regions=removeShortClips(applyOverrides(state.autoRegions,editMasks(state.autoRegions,state.overrides,state.edgeEdits,state.duration,minimumClip())),minimumClip()).map(region=>({...region,id:++cutId}));
   state.cuts=state.regions.filter(region=>region.cut);
   state.selected=selectionTime===null?null:state.regions.find(region=>selectionTime>=region.start&&selectionTime<region.end)?.id??null;
 }
 function detect() {
   if(!state.id)return;
   playback.pause();
-  state.autoRegions=detectRegions(state.levels,state.step,state.duration,Number($('threshold').value),Number($('silence').value),0,Number($('padding').value));
+  const audio=$('silence-enabled').checked?detectRegions(state.levels,state.step,state.duration,Number($('threshold').value),Number($('silence').value),0,Number($('padding').value)):[{start:0,end:state.duration,kind:'motion',autoCut:false}];
+  const visual=$('stillness-enabled').checked&&state.stillnessScores?stillnessRegions(state.stillnessScores,state.stillnessStep,state.duration,Number($('stillness-threshold').value),Number($('stillness-minimum').value),Number($('stillness-padding').value)):null;
+  state.autoRegions=combineDetections(audio,visual,state.duration);
   rebuildRegions();dirty();drawCuts();drawOverview();drawWaveform();
 }
 function toggleRegion(region) {
   if(!region||state.busy)return;
   remember();playback.pause();
-  const resolved=resolveEdgeEdits(removeShortClips(applyOverrides(state.autoRegions,state.overrides),Number($('minimum-audio').value)),state.edgeEdits,state.duration);
+  const resolved=resolveEdgeEdits(removeShortClips(applyOverrides(state.autoRegions,state.overrides),minimumClip()),state.edgeEdits,state.duration);
   state.edgeEdits=state.edgeEdits.filter(edit=>!resolved.some(r=>r.id===edit.id&&r.end>region.start&&r.start<region.end));
   state.overrides=setOverride(state.overrides,region.start,region.end,!region.cut);
   rebuildRegions((region.start+region.end)/2);dirty();drawCuts();drawOverview();
@@ -104,7 +116,7 @@ function updateStats() {
 function updateSelection() {
   const c=state.regions.find(c=>c.id===state.selected);
   $('inspector').hidden=!c;$('inspector-row').hidden=!c;
-  if(c){const bounds=c.cut?mergedCuts().find(u=>c.start>=u.start-1e-6&&c.end<=u.end+1e-6)||c:c;$('selection-label').textContent=`${c.cut?'Cut':c.kind==='audio'?'Audio':'Silence'} · ${time(bounds.start)} → ${time(bounds.end)}${c.manual?' · manual':''}`;$('delete').hidden=!c.cut;}
+  if(c){const bounds=c.cut?mergedCuts().find(u=>c.start>=u.start-1e-6&&c.end<=u.end+1e-6)||c:c;$('selection-label').textContent=`${c.cut?'Cut':regionName(c)} · ${time(bounds.start)} → ${time(bounds.end)}${c.manual?' · manual':''}`;$('delete').hidden=!c.cut;}
 }
 function selectCut(id) {
   state.selected=id;
@@ -121,7 +133,7 @@ function drawCuts() {
     el.style.left=`${(c.start-state.viewStart)/span()*100}%`;
     el.style.width=`${(c.end-c.start)/span()*100}%`;
     el.dataset.id=c.id;el.tabIndex=0;el.setAttribute('role','button');
-    el.setAttribute('aria-label',`${c.kind==='audio'?'Audio':'Silence'} from ${c.start.toFixed(2)} to ${c.end.toFixed(2)} seconds, ${c.cut?'cut':'kept'}`);el.setAttribute('aria-pressed',String(c.cut));
+    el.setAttribute('aria-label',`${regionName(c)} from ${c.start.toFixed(2)} to ${c.end.toFixed(2)} seconds, ${c.cut?'cut':'kept'}`);el.setAttribute('aria-pressed',String(c.cut));
     el.title=`${time(c.start)} → ${time(c.end)}${c.manual?' · Manually '+(c.cut?'cut':'kept'):''}`;el.dataset.manual=String(c.manual);
     el.innerHTML=c.cut?`<button class="cut-handle start" data-edge="start" aria-label="Drag cut start" title="${time(c.start)}" tabindex="-1"></button><button class="cut-handle end" data-edge="end" aria-label="Drag cut end" title="${time(c.end)}" tabindex="-1"></button>`:'';
     if(c.cut){const union=unions.find(u=>c.start>=u.start-1e-6&&c.end<=u.end+1e-6);if(union){if(c.start>union.start+1e-6)el.querySelector('.start').remove();if(c.end<union.end-1e-6)el.querySelector('.end').remove();}}
@@ -144,7 +156,7 @@ function paintWaveform(ctx,w,h,start,end,overview=false) {
   const fullHeight=Math.max(0,h-4),ratio=db=>Math.min(1,Math.pow(10,(db-maximum)/40));
   if(!overview) {
     const threshold=ratio(Number($('threshold').value)),center=27+h/2,offset=threshold*fullHeight/2;
-    for(const [id,y] of [['threshold-upper',center-offset],['threshold-lower',center+offset]]) {$(id).hidden=false;$(id).style.top=`${y}px`;}
+    for(const [id,y] of [['threshold-upper',center-offset],['threshold-lower',center+offset]]) {$(id).hidden=!$('silence-enabled').checked;$(id).style.top=`${y}px`;}
     $('threshold-upper').querySelector('span').textContent=`${$('threshold').value} dB`;
   }
   for(let i=0;i<bars;i++) {
@@ -290,6 +302,7 @@ function attachPreview(data) {
 }
 function loadAnalysis(id,data,name,saved=null) {
   state.id=id;state.name=name||data.filename||'Video';state.duration=data.duration;state.levels=data.levels;state.step=data.step;
+  state.stillnessScores=data.stillnessVersion===1?data.stillnessScores:null;state.stillnessStep=data.stillnessStep||0.1;
   state.viewStart=clamp(saved?.viewStart||0,0,Math.max(0,data.duration-0.5));
   state.viewEnd=clamp(saved?.viewEnd||data.duration,state.viewStart+Math.min(0.5,data.duration),data.duration);
   $('duration').textContent=time(data.duration);$('empty-timeline').hidden=true;
@@ -325,12 +338,12 @@ video.addEventListener('error',async()=>{
 });
 async function upload(file) {
   if(state.busy)return;if(!file.size){message('Choose a nonempty video file.');return;}
-  message();showProcessing('Uploading video…');state.id=null;state.duration=0;state.levels=[];state.cuts=[];state.regions=[];state.autoRegions=[];state.overrides=[];state.edgeEdits=[];state.selected=null;state.history=[];state.future=[];state.viewStart=state.viewEnd=0;fallbackAttempted=false;
+  message();showProcessing('Uploading video…');state.id=null;state.duration=0;state.levels=[];state.stillnessScores=null;$('stillness-status').textContent='';state.cuts=[];state.regions=[];state.autoRegions=[];state.overrides=[];state.edgeEdits=[];state.selected=null;state.history=[];state.future=[];state.viewStart=state.viewEnd=0;fallbackAttempted=false;
   video.removeAttribute('src');video.load();$('render-result').hidden=true;$('empty-timeline').hidden=false;
   $('current').textContent=$('duration').textContent='00:00.00';redrawTimeline();drawOverview();
   try {
     const {id}=await uploadFile(file);$('processing-label').textContent='Analyzing audio…';
-    const data=await waitForJob(id);loadAnalysis(id,data,file.name);attachPreview(data);
+    const data=await waitForJob(id);loadAnalysis(id,data,file.name);attachPreview(data);await ensureStillness();
   }catch(error){state.busy=false;state.id=null;$('processing').hidden=true;$('upload').hidden=false;message(error.message);refreshButtons();}
 }
 $('replace').onclick=$('upload').onclick=()=>$('file').click();
@@ -338,8 +351,27 @@ $('file').onchange=()=>{const file=$('file').files[0];if(file)upload(file);$('fi
 ['dragenter','dragover'].forEach(type=>document.addEventListener(type,e=>{e.preventDefault();if(!state.busy&&e.dataTransfer.types.includes('Files'))$('stage').classList.add('dragging');}));
 document.addEventListener('dragleave',e=>{if(!e.relatedTarget)$('stage').classList.remove('dragging');});
 document.addEventListener('drop',e=>{e.preventDefault();$('stage').classList.remove('dragging');if(!state.busy&&e.dataTransfer.files[0])upload(e.dataTransfer.files[0]);});
-for(const id of ['threshold','silence','minimum-audio','padding']) {
+for(const id of ['threshold','silence','minimum-audio','padding','stillness-threshold','stillness-minimum','stillness-padding']) {
   $(id).addEventListener('input',()=>{syncSliders();detect();});
+}
+$('silence-enabled').onchange=()=>{detect();refreshButtons();saveSession();};
+$('stillness-enabled').onchange=async()=>{refreshButtons();detect();saveSession();await ensureStillness();};
+async function ensureStillness() {
+  if(!$('stillness-enabled').checked||!state.id||state.stillnessScores)return;
+  state.busy=true;playback.pause();message();refreshButtons();
+  $('stillness-status').textContent='Analyzing stillness…';
+  try {
+    await request('/api/stillness',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:state.id})});
+    let data;
+    do {
+      data=await request(`/api/jobs/${state.id}`);
+      if(data.stillnessStatus==='error')throw new Error(data.stillnessError||'Could not analyze stillness.');
+      $('stillness-status').textContent=`Analyzing stillness… ${Math.round(data.stillnessProgress||0)}%`;
+      if(data.stillnessStatus!=='ready')await delay(200);
+    }while(data.stillnessStatus!=='ready');
+    state.stillnessScores=data.stillnessScores;state.stillnessStep=data.stillnessStep;
+  }catch(error){$('stillness-enabled').checked=false;message(error.message);}
+  finally{state.busy=false;$('stillness-status').textContent='';detect();refreshButtons();saveSession();}
 }
 function positionTime(x) {const rect=$('timeline').getBoundingClientRect();return clamp(state.viewStart+(x-rect.left)/rect.width*span(),0,state.duration);}
 function seek(x) {video.currentTime=positionTime(x);updatePlayhead();}
@@ -374,13 +406,13 @@ $('timeline').addEventListener('pointermove',e=>{
   region[drag.edge]=drag.edge==='start'?Math.min(t,region.end-0.02):Math.max(t,region.start+0.02);
   drag.current=region[drag.edge];
   state.edgeEdits=structuredClone(drag.edgeEdits);
-  const resolved=resolveEdgeEdits(removeShortClips(applyOverrides(state.autoRegions,state.overrides),Number($('minimum-audio').value)),state.edgeEdits,state.duration);
+  const resolved=resolveEdgeEdits(removeShortClips(applyOverrides(state.autoRegions,state.overrides),minimumClip()),state.edgeEdits,state.duration);
   const matching=resolved.find(edit=>(drag.region.start+drag.region.end)/2>=edit.start&&(drag.region.start+drag.region.end)/2<edit.end);
   let edit,base;
   if(matching) {edit=state.edgeEdits.find(e=>e.id===matching.id);base=matching.base;}
   else {
     const mid=(drag.region.start+drag.region.end)/2;
-    const baseline=removeShortClips(applyOverrides(state.autoRegions,state.overrides),Number($('minimum-audio').value));
+    const baseline=removeShortClips(applyOverrides(state.autoRegions,state.overrides),minimumClip());
     base=(drag.region.kind==='cut'?mergedAutomaticCuts(baseline):baseline).find(r=>r.kind===drag.region.kind&&mid>=r.start&&mid<r.end)||drag.region;
     edit={id:crypto.randomUUID(),anchor:{start:base.start,end:base.end,kind:base.kind},startOffset:drag.region.start-base.start,endOffset:drag.region.end-base.end};
     state.edgeEdits.push(edit);
@@ -513,8 +545,10 @@ async function restore() {
     showProcessing('Opening video…');
     const data=await request(`/api/jobs/${saved.id}`);
     if(data.status!=='ready')throw new Error('Choose the video again to continue.');
-    $('threshold').value=saved.threshold||-35;$('silence').value=saved.silence||0.5;$('minimum-audio').value=saved.minimumAudio??0;$('padding').value=saved.padding??0.04;syncSliders();
-    loadAnalysis(saved.id,data,saved.name,saved);await refreshPreview();
+    $('threshold').value=saved.threshold||-35;$('silence').value=saved.silence||0.5;$('minimum-audio').value=saved.minimumAudio??0;$('padding').value=saved.padding??0.04;
+    $('silence-enabled').checked=saved.silenceEnabled!==false;$('stillness-enabled').checked=saved.stillnessEnabled===true;
+    $('stillness-threshold').value=saved.stillnessThreshold??0.8;$('stillness-minimum').value=saved.stillnessMinimum??1;$('stillness-padding').value=saved.stillnessPadding??0.15;syncSliders();
+    loadAnalysis(saved.id,data,saved.name,saved);await refreshPreview();await ensureStillness();
   }catch(error){state.busy=false;state.id=null;$('processing').hidden=true;$('upload').hidden=false;message(error.message);refreshButtons();}
 }
 restore();

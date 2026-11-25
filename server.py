@@ -274,6 +274,66 @@ def analyze(key):
         patch_job(key, status="error", error=user_error(exc))
 
 
+MOTION_STEP = 0.1
+MOTION_FRAME_BYTES = 64 * 36 * 3
+
+
+def motion_score(previous, current):
+    maximum = 0
+    for y in range(0, 36, 9):
+        for x in range(0, 64, 8):
+            total = 0
+            for dy in range(9):
+                offset = ((y + dy) * 64 + x) * 3
+                total += sum(abs(a - b) for a, b in zip(previous[offset:offset+24], current[offset:offset+24]))
+            maximum = max(maximum, total / (8 * 9 * 3 * 255) * 100)
+    return round(maximum, 3)
+
+
+def analyze_stillness(key):
+    proc = None
+    try:
+        job = JOBS[key]
+        proc = start_process(["ffmpeg", "-v", "error", *decoding_options(), "-i", str(job["source"]),
+                              "-map", "0:v:0", "-an", "-vf", "fps=10:start_time=0,scale=64:36",
+                              "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        previous = None
+        scores = []
+        while True:
+            frame = bytearray()
+            while len(frame) < MOTION_FRAME_BYTES:
+                chunk = proc.stdout.read(MOTION_FRAME_BYTES - len(frame))
+                if not chunk:
+                    break
+                frame.extend(chunk)
+            if len(frame) != MOTION_FRAME_BYTES:
+                break
+            if previous is not None:
+                scores.append(motion_score(previous, frame))
+            previous = frame
+            patch_job(key, stillnessProgress=min(99, len(scores)*MOTION_STEP/job["duration"]*100))
+        if proc.wait() != 0 or previous is None:
+            raise ValueError("Couldn't analyze motion in this video. Try another format.")
+        # Never infer a long frozen tail from a short or incomplete decode.
+        scores.append(scores[-1] if scores else 100)
+        expected = math.ceil(job["duration"] / MOTION_STEP)
+        scores = scores[:expected] + [100] * max(0, expected-len(scores))
+        patch_job(key, stillnessStatus="ready", stillnessProgress=100,
+                  stillnessScores=scores, stillnessStep=MOTION_STEP, stillnessVersion=1)
+        persist_job(key)
+    except Exception as exc:
+        patch_job(key, stillnessStatus="error", stillnessError=user_error(exc))
+    finally:
+        if proc:
+            proc.stdout.close()
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            with LOCK:
+                PROCESSES.discard(proc)
+
+
 def user_error(exc):
     if isinstance(exc, subprocess.CalledProcessError):
         return "FFmpeg couldn't process this video. Try another file or format."
@@ -413,6 +473,23 @@ class Handler(BaseHTTPRequestHandler):
                 if job.get("previewStatus") != "preparing":
                     patch_job(key, previewStatus="preparing")
                     threading.Thread(target=refresh_preview, args=(key, bool(body.get("nativeHevc"))), daemon=True).start()
+                return self.json_response({"id": key})
+            if self.path == "/api/stillness":
+                length = int(self.headers.get("Content-Length", "0"))
+                if length > 4096:
+                    raise ValueError("Invalid request.")
+                body = json.loads(self.rfile.read(length))
+                key = body.get("id")
+                with LOCK:
+                    job = JOBS.get(key, {})
+                    if job.get("status") != "ready" or "source" not in job:
+                        raise ValueError("Choose a video first.")
+                    cached = job.get("stillnessStatus") == "ready" and job.get("stillnessVersion") == 1
+                    start = not cached and job.get("stillnessStatus") != "analyzing"
+                    if start:
+                        job.update(stillnessStatus="analyzing", stillnessProgress=0, stillnessError=None)
+                if start:
+                    threading.Thread(target=analyze_stillness, args=(key,), daemon=True).start()
                 return self.json_response({"id": key})
             if self.path == "/api/render":
                 length = int(self.headers.get("Content-Length", "0"))

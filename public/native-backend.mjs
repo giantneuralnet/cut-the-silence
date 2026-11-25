@@ -1,7 +1,8 @@
-import { Input, BlobSource, ALL_FORMATS, AudioSampleSink, VideoSampleSink,
+import { Input, BlobSource, ALL_FORMATS, AudioSampleSink, VideoSampleSink, CanvasSink,
   Output, BufferTarget, Mp4OutputFormat, AudioSampleSource, VideoSampleSource,
   canEncodeAudio, canEncodeVideo, QUALITY_HIGH, Quality } from './vendor/mediabunny/mediabunny.mjs';
 
+import { MOTION_WIDTH, MOTION_HEIGHT, MOTION_STEP, frameChange } from './stillness.mjs';
 import { videoProfile } from './video-profile.mjs';
 
 // Hardware acceleration is a preference; browsers decide which codec implementation to use.
@@ -105,4 +106,27 @@ export async function renderNative(file,segments,job) {
     return new Blob([target.buffer],{type:'video/mp4'});
   }catch(error){if(output)try{await output.cancel();}catch{}throw error;}
   finally{input.dispose();}
+}
+
+export async function analyzeStillnessNative(file,job) {
+  const {input,video}=await open(file);
+  try {
+    if(!await video.canDecode())throw new Error('Native video decoder unavailable.');
+    const count=Math.ceil(job.duration/MOTION_STEP),scores=[];
+    const sink=new CanvasSink(video,{width:MOTION_WIDTH,height:MOTION_HEIGHT,fit:'fill',poolSize:1,
+      decoderOptions:{hardwareAcceleration:'prefer-hardware'}});
+    function* timestamps(){for(let i=0;i<count;i++)yield i*MOTION_STEP;}
+    let previous=null,index=0;
+    for await(const frame of sink.canvasesAtTimestamps(timestamps())) {
+      const current=frame?frame.canvas.getContext('2d',{willReadFrequently:true}).getImageData(0,0,MOTION_WIDTH,MOTION_HEIGHT).data:null;
+      if(index)scores.push(frameChange(previous,current,4));
+      previous=current;index++;
+      job.stillnessProgress=Math.min(99,index/count*100);
+      if(index%30===0)await new Promise(resolve=>setTimeout(resolve,0));
+    }
+    if(!index)throw new Error('No video frames were decoded.');
+    scores.push(scores.at(-1)??100);
+    while(scores.length<count)scores.push(100);
+    return {stillnessScores:scores.slice(0,count),stillnessStep:MOTION_STEP,stillnessVersion:1,stillnessProcessing:'native'};
+  }finally{input.dispose();}
 }
