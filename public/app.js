@@ -1,4 +1,4 @@
-import { VERSION as MOTION_VERSION } from './motion.mjs';
+import { VERSION as MOTION_VERSION } from './motion.mjs?v=3';
 import { stillnessRegions, combineDetections } from './stillness.mjs';
 import { clipExports, clipsZip } from './clip-export.mjs';
 import { rememberEdit, undoEdit, redoEdit, clearManualEdits } from './edit-history.mjs';
@@ -9,7 +9,7 @@ const $ = id => document.getElementById(id);
 const video = $('video');
 const browserMode=!['127.0.0.1','localhost','[::1]'].includes(location.hostname)||new URLSearchParams(location.search).has('browser');
 let browserBackendPromise;
-const getBrowserBackend=()=>browserBackendPromise??=import('./browser-backend.mjs?v=20261125-2');
+const getBrowserBackend=()=>browserBackendPromise??=import('./browser-backend.mjs?v=20261125-3');
 const SESSION_KEY=browserMode?'cut-the-silence-browser-session':'video-editor-session';
 const state = {id:null,name:'',duration:0,levels:[],step:0.02,stillnessScores:null,stillnessStep:0.1,cuts:[],selected:null,
   preview:false,playbackMode:'edited',busy:false,followPlayback:true,history:[],future:[],viewStart:0,viewEnd:0,previewMode:null,regions:[],overrides:[],edgeEdits:[],autoRegions:[]};
@@ -548,7 +548,7 @@ async function restore() {
     if(data.status!=='ready')throw new Error('Choose the video again to continue.');
     $('threshold').value=saved.threshold||-35;$('silence').value=saved.silence||0.5;$('minimum-audio').value=saved.minimumAudio??0;$('padding').value=saved.padding??0.04;
     $('silence-enabled').checked=saved.silenceEnabled!==false;$('stillness-enabled').checked=saved.stillnessEnabled===true;
-    $('stillness-threshold').value=saved.stillnessVersion===MOTION_VERSION?(saved.stillnessThreshold??0.5):0.5;$('stillness-minimum').value=saved.stillnessMinimum??1;$('stillness-padding').value=saved.stillnessPadding??0.15;syncSliders();
+    $('stillness-threshold').value=saved.stillnessVersion>=2?(saved.stillnessThreshold??0.5):0.5;$('stillness-minimum').value=saved.stillnessMinimum??1;$('stillness-padding').value=saved.stillnessPadding??0.15;syncSliders();
     loadAnalysis(saved.id,data,saved.name,saved);await refreshPreview();await ensureStillness();
   }catch(error){state.busy=false;state.id=null;$('processing').hidden=true;$('upload').hidden=false;message(error.message);refreshButtons();}
 }

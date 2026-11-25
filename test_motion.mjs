@@ -38,10 +38,38 @@ test('one-second baseline detects slow subpixel movement and keeps its interval'
   const detector=new MotionAnalyzer();
   for(let i=0;i<11;i++)detector.add(fixture(i*.2));
   const result=detector.finish(2.2);
-  assert.equal(result.stillnessVersion,2);assert.equal(result.stillnessScores.length,11);
+  assert.equal(result.stillnessVersion,3);assert.equal(result.stillnessScores.length,11);
   assert.ok(result.stillnessScores.slice(0,10).every(s=>s>=.5),JSON.stringify(result.stillnessScores));
 });
 test('missing frames and undecoded tails are kept conservatively',()=>{
   const detector=new MotionAnalyzer();detector.add(fixture());detector.add(null);
   assert.deepEqual(detector.finish(.8).stillnessScores,[100,100,100,100]);
+});
+
+test('a lone reliable patch is accepted after three consistent observations',async()=>{
+  const {PersistentMotion,COLS,ROWS}=await import('./public/motion.mjs');
+  const patch=(dx=1,dy=0,corr=.93,gain=.08)=>{const f=new Float32Array(COLS*ROWS*4).fill(-1);f.set([dx,dy,corr,corr-gain],400);return f;};
+  const detector=new PersistentMotion(),flow=patch();
+  assert.equal(flowScore(flow,1),0); // No neighboring patch supports this one.
+  assert.equal(detector.score(flow,1),0);
+  assert.equal(detector.score(flow,1),0);
+  assert.equal(detector.score(flow,1),1);
+  detector.score(null,1);
+  assert.equal(detector.score(flow,1),0);
+  assert.equal(detector.score(patch(-1),1),0);
+  assert.equal(detector.score(flow,1),0);
+  assert.equal(detector.score(patch(1,0,.8),1),0);
+  assert.equal(detector.score(flow,1),0);
+});
+test('confirming one small patch backfills its movement onset',async()=>{
+  const {COLS,ROWS}=await import('./public/motion.mjs');
+  const flow=new Float32Array(COLS*ROWS*4).fill(-1);flow.set([1,0,.93,.85],400);
+  const detector=new MotionAnalyzer(()=>flow),frame=fixture();
+  for(let i=0;i<8;i++)detector.add(frame);
+  assert.ok(detector.finish(1.6).stillnessScores.every(s=>s===5));
+});
+test('repeated stationary exposure and blur changes remain still',()=>{
+  const detector=new MotionAnalyzer();
+  for(let i=0;i<12;i++)detector.add(i%2?blur(fixture(0,20,1.1)):fixture());
+  assert.ok(detector.finish(2.4).stillnessScores.every(s=>s===0));
 });

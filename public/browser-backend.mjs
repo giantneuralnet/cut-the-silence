@@ -1,9 +1,9 @@
-import { WIDTH as MOTION_WIDTH, HEIGHT as MOTION_HEIGHT, VERSION as MOTION_VERSION } from './motion.mjs';
-import { createMotionAnalyzer } from './motion-gpu.mjs';
+import { WIDTH as MOTION_WIDTH, HEIGHT as MOTION_HEIGHT, VERSION as MOTION_VERSION } from './motion.mjs?v=3';
+import { createMotionAnalyzer } from './motion-gpu.mjs?v=3';
 import { videoProfile, softwareVideoOptions } from './video-profile.mjs';
 import { FFmpeg } from './vendor/ffmpeg/index.js';
 import { planExport, exportGraph } from './export-plan.mjs';
-import { analyzeNative, renderNative, analyzeStillnessNative } from './native-backend.mjs?v=20261125-2';
+import { analyzeNative, renderNative, analyzeStillnessNative } from './native-backend.mjs?v=20261125-3';
 
 const jobs=new Map();
 const MAX_SIZE=512*1024*1024;

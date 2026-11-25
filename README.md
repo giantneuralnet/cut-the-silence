@@ -79,13 +79,15 @@ analysis is automatically replaced; the old percentage threshold is reset to
 
 The detector tracks 7×7 patches using zero-mean normalized cross correlation
 (ZNCC), at 320×180 resolution and 5 samples per second. It searches for local
-translation, compares 0.2-second and 1-second baselines, and requires neighboring
-patches to agree. The longer comparison captures small gradual displacement.
+translation, compares 0.2-second and 1-second baselines, and accepts either neighboring
+patches that agree or one reliable patch moving consistently across three
+consecutive observations. Confirmed movement is kept from its observed onset,
+including the earlier frames used to establish consistency. The longer comparison captures small gradual displacement.
 Brightness/contrast normalization, mild denoising, and stationary comparisons
 at different blur levels reduce exposure and focus false positives. Flat or
 isolated unstable patches do not establish movement. Widespread tracking
-failure is kept conservatively. The longer baseline can retain up to one extra
-second around slow movement, in addition to padding.
+failure is kept conservatively. Temporal confirmation can retain up to 1.4 extra seconds around slow movement,
+in addition to padding. Displacement remains measured in whole analysis pixels.
 
 In browsers the patch search runs through WebGL 2 when floating-point render
 targets are available; it falls back to the same CPU algorithm if unavailable

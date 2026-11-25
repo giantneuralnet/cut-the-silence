@@ -1,6 +1,6 @@
 // Local displacement from zero-mean normalized cross correlation (ZNCC).
 // Both the CPU and WebGL implementations use these dimensions and acceptance rules.
-export const WIDTH=320, HEIGHT=180, STEP=.2, VERSION=2;
+export const WIDTH=320, HEIGHT=180, STEP=.2, VERSION=3;
 export const STRIDE=8, BORDER=8, COLS=38, ROWS=21, RADIUS=3;
 export function grayscale(data,channels=3) {
   if(!data)return null;
@@ -46,9 +46,28 @@ export function trackCPU(a,b) {
   }
   return result;
 }
+const validFlow=(flow,k)=>flow[k+3]>-1&&flow[k+2]>.85&&flow[k+2]-flow[k+3]>.025;
+const compatible=(a,b,k)=>{
+  const x=Math.hypot(a[k],a[k+1]),y=Math.hypot(b[k],b[k+1]);
+  return x>0&&y>0&&a[k]*b[k]+a[k+1]*b[k+1]>.75*x*y&&Math.abs(x-y)<=1.5;
+};
+// A lone patch can establish motion when three consecutive observations agree.
+// Keep confidence/blur gates unchanged; isolated or reversing noise cannot vote.
+export class PersistentMotion {
+  constructor(){this.history=[];}
+  score(flow,seconds) {
+    if(!flow){this.history=[];return 0;}
+    this.history.push(flow);if(this.history.length>3)this.history.shift();
+    if(this.history.length<3)return 0;
+    const [a,b,c]=this.history;let speed=0;
+    for(let k=0;k<c.length;k+=4)if(validFlow(a,k)&&validFlow(b,k)&&validFlow(c,k)&&compatible(a,b,k)&&compatible(b,c,k)&&compatible(a,c,k))
+      speed=Math.max(speed,Math.min(Math.hypot(a[k],a[k+1]),Math.hypot(b[k],b[k+1]),Math.hypot(c[k],c[k+1]))/seconds);
+    return Math.round(speed*1000)/1000;
+  }
+}
 export function flowScore(flow,seconds) {
   let score=0,textured=0,lost=0;
-  const valid=k=>flow[k+3]>-1&&flow[k+2]>.85&&flow[k+2]-flow[k+3]>.025;
+  const valid=k=>validFlow(flow,k);
   for(let gy=0;gy<ROWS;gy++)for(let gx=0;gx<COLS;gx++) {
     const k=(gy*COLS+gx)*4;
     if(flow[k+3]>-1){textured++;if(flow[k+2]<.5)lost++;}
@@ -70,18 +89,24 @@ export function flowScore(flow,seconds) {
   return Math.round(score*1000)/1000;
 }
 export class MotionAnalyzer {
-  constructor(track=trackCPU){this.track=track;this.frames=[];this.scores=[];this.processing='cpu';}
+  constructor(track=trackCPU){this.track=track;this.frames=[];this.scores=[];this.processing='cpu';this.shortMotion=new PersistentMotion();this.longMotion=new PersistentMotion();}
   add(data,channels=3) {
     const current=grayscale(data,channels),index=this.frames.length;
     this.frames.push(current);
     if(index) {
       const previous=this.frames[index-1];
-      let score=current&&previous?flowScore(this.track(previous,current),STEP):100;
-      if(index>=5&&current&&this.frames[index-5]) {
-        const longScore=flowScore(this.track(this.frames[index-5],current),1);
-        // Only extend reliable small motion across the longer baseline. Fast
-        // motion/scene changes use the short comparison to avoid long tails.
-        if(longScore>0&&longScore<4)for(let i=index-5;i<index-1;i++)this.scores[i]=Math.max(this.scores[i],longScore);
+      const shortFlow=current&&previous?this.track(previous,current):null;
+      const persistentShort=this.shortMotion.score(shortFlow,STEP);
+      let score=shortFlow?Math.max(flowScore(shortFlow,STEP),persistentShort):100;
+      if(persistentShort)for(let i=Math.max(0,index-3);i<index-1;i++)this.scores[i]=Math.max(this.scores[i],persistentShort);
+      const longFlow=index>=5&&current&&this.frames[index-5]?this.track(this.frames[index-5],current):null;
+      const persistentLong=this.longMotion.score(longFlow,1);
+      if(longFlow) {
+        const longScore=Math.max(flowScore(longFlow,1),persistentLong);
+        // Backfill the whole observed interval, including the two earlier
+        // comparisons needed to confirm a lone patch. Do not clip its onset.
+        const start=Math.max(0,index-(persistentLong>0&&persistentLong<4?7:5));
+        if(longScore>0&&longScore<4)for(let i=start;i<index-1;i++)this.scores[i]=Math.max(this.scores[i],longScore);
         if(longScore<4)score=Math.max(score,longScore);
       }
       this.scores.push(score);

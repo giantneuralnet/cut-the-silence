@@ -275,7 +275,7 @@ def analyze(key):
 
 
 MOTION_STEP = 0.2
-MOTION_VERSION = 2
+MOTION_VERSION = 3
 
 
 def analyze_stillness(key):

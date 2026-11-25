@@ -1,4 +1,4 @@
-import {MotionAnalyzer,trackCPU,soften,WIDTH,HEIGHT,COLS,ROWS} from './motion.mjs';
+import {MotionAnalyzer,trackCPU,soften,WIDTH,HEIGHT,COLS,ROWS} from './motion.mjs?v=3';
 // One fragment tracks one patch. R32F input and RGBA32F output preserve the
 // same normalized-correlation arithmetic as the CPU fallback.
 export function createMotionAnalyzer() {
