@@ -178,11 +178,11 @@ class VideoPipelineTests(unittest.TestCase):
         job = server.JOBS["test-motion"]
         self.assertEqual(job["stillnessStatus"], "ready", job.get("stillnessError"))
         self.assertEqual(job["status"], "ready")
-        self.assertEqual(job["stillnessVersion"], 1)
-        self.assertEqual(len(job["stillnessScores"]), 60)
-        self.assertLess(max(job["stillnessScores"][1:17]), .1)
-        self.assertGreater(min(job["stillnessScores"][22:37]), .8)
-        self.assertLess(max(job["stillnessScores"][42:57]), .1)
+        self.assertEqual(job["stillnessVersion"], 2)
+        self.assertEqual(len(job["stillnessScores"]), 30)
+        self.assertLess(max(job["stillnessScores"][1:4]), .1)
+        self.assertGreater(min(job["stillnessScores"][12:17]), .8)
+        self.assertLess(max(job["stillnessScores"][26:29]), .1)
         # The same series is produced when the source has no audio track.
         no_audio = folder / "no-audio.mp4"
         server.run(["ffmpeg", "-v", "error", "-y", "-i", str(source), "-an", "-c:v", "copy", str(no_audio)])

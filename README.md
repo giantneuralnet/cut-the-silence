@@ -33,10 +33,10 @@ Use the local version for larger recordings and hardware-accelerated export.
 
 ## Run locally
 
-Requires Python 3.10+ and `ffmpeg` / `ffprobe` on PATH. On macOS:
+Requires Python 3.10+, Node.js 18+ (for stillness tracking), and `ffmpeg` / `ffprobe` on PATH. On macOS:
 
 ```sh
-brew install ffmpeg
+brew install ffmpeg node
 git clone https://github.com/giantneuralnet/cut-the-silence.git
 cd cut-the-silence
 python3 server.py
@@ -67,12 +67,44 @@ surviving audio. Explicitly kept sections override automatic removal.
 Enable **Cut stillness** to remove visually still stretches even when audio is
 playing. Disable **Cut silence** to make automatic cuts depend only on motion,
 or leave both enabled to cut either kind of inactivity. Stillness level is the
-maximum allowed frame change: raise it to cut more movement. Cut stillness longer
-than sets the minimum stationary duration. Padding around movement retains a
-little still footage before and after movement. Motion is sampled every 0.1 s at
-low resolution, so very brief or subtle movements may need a lower threshold.
-The first use analyzes the video; results are cached, so slider changes are
-immediate. Existing manual keeps, cuts, and boundary adjustments take precedence.
+maximum tracked speed in analysis pixels per second: lower it to preserve
+subtler movement. Cut stillness longer than sets the minimum stationary duration.
+Padding around movement retains footage before and after movement. The first
+use analyzes the video; results are cached, so slider changes are immediate.
+Manual keeps, cuts, and boundary adjustments take precedence. Older motion
+analysis is automatically replaced; the old percentage threshold is reset to
+0.5 px/s because the units have changed.
+
+### Motion detector
+
+The detector tracks 7×7 patches using zero-mean normalized cross correlation
+(ZNCC), at 320×180 resolution and 5 samples per second. It searches for local
+translation, compares 0.2-second and 1-second baselines, and requires neighboring
+patches to agree. The longer comparison captures small gradual displacement.
+Brightness/contrast normalization, mild denoising, and stationary comparisons
+at different blur levels reduce exposure and focus false positives. Flat or
+isolated unstable patches do not establish movement. Widespread tracking
+failure is kept conservatively. The longer baseline can retain up to one extra
+second around slow movement, in addition to padding.
+
+In browsers the patch search runs through WebGL 2 when floating-point render
+targets are available; it falls back to the same CPU algorithm if unavailable
+or if the graphics context is lost. WebCodecs independently requests hardware
+video decoding. The local Python server streams FFmpeg frames to the shared
+Node.js CPU tracker. Compatibility decoding processes ten-second chunks to
+bound raw-frame memory. No footage is uploaded by the hosted editor.
+
+This is a lightweight implementation of normalized patch correspondence, not
+a bundled OpenCV or neural optical-flow model. We considered
+[DIS optical flow](https://docs.opencv.org/4.13.0/de/d4f/classcv_1_1DISOpticalFlow.html),
+[RAFT](https://arxiv.org/abs/2003.12039), and
+[CUDA Lucas–Kanade](https://docs.opencv.org/doc/doxygen/html/d7/d05/classcv_1_1cuda_1_1SparsePyrLKOpticalFlow.html).
+ZNCC was chosen for a small, portable browser implementation with intensity
+normalization ([research](https://arxiv.org/abs/1810.04320),
+[correlation definition](https://legacy-docs.opencv.org/4.x/df/dfb/group__imgproc__object.html)).
+It is not immune to strong shadows, severe blur, repeating patterns, or tiny
+untextured objects. Camera motion also counts as movement. Review the removed
+preview for critical footage; lower the threshold or keep a section manually.
 
 Tap a section or use Keep/Cut current clip under the playhead. Drag cut boundaries
 to adjust offsets; those offsets follow detected boundaries as settings change.
@@ -87,7 +119,7 @@ unchecked to render a single joined MP4.
 ## Development and deployment
 
 The UI is plain HTML, CSS and JavaScript with no build step. The optional local
-backend uses only Python's standard library. Browser processing uses pinned Mediabunny (MPL-2.0), an MIT-licensed FFmpeg
+backend uses Python's standard library and Node.js without npm dependencies. Browser processing uses pinned Mediabunny (MPL-2.0), an MIT-licensed FFmpeg
 wrapper, and a separately downloaded WebAssembly core.
 
 ```sh

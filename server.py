@@ -274,64 +274,48 @@ def analyze(key):
         patch_job(key, status="error", error=user_error(exc))
 
 
-MOTION_STEP = 0.1
-MOTION_FRAME_BYTES = 64 * 36 * 3
-
-
-def motion_score(previous, current):
-    maximum = 0
-    for y in range(0, 36, 9):
-        for x in range(0, 64, 8):
-            total = 0
-            for dy in range(9):
-                offset = ((y + dy) * 64 + x) * 3
-                total += sum(abs(a - b) for a, b in zip(previous[offset:offset+24], current[offset:offset+24]))
-            maximum = max(maximum, total / (8 * 9 * 3 * 255) * 100)
-    return round(maximum, 3)
+MOTION_STEP = 0.2
+MOTION_VERSION = 2
 
 
 def analyze_stillness(key):
-    proc = None
+    decoder = tracker = None
     try:
         job = JOBS[key]
-        proc = start_process(["ffmpeg", "-v", "error", *decoding_options(), "-i", str(job["source"]),
-                              "-map", "0:v:0", "-an", "-vf", "fps=10:start_time=0,scale=64:36",
-                              "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"],
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        previous = None
-        scores = []
-        while True:
-            frame = bytearray()
-            while len(frame) < MOTION_FRAME_BYTES:
-                chunk = proc.stdout.read(MOTION_FRAME_BYTES - len(frame))
-                if not chunk:
-                    break
-                frame.extend(chunk)
-            if len(frame) != MOTION_FRAME_BYTES:
-                break
-            if previous is not None:
-                scores.append(motion_score(previous, frame))
-            previous = frame
-            patch_job(key, stillnessProgress=min(99, len(scores)*MOTION_STEP/job["duration"]*100))
-        if proc.wait() != 0 or previous is None:
-            raise ValueError("Couldn't analyze motion in this video. Try another format.")
-        # Never infer a long frozen tail from a short or incomplete decode.
-        scores.append(scores[-1] if scores else 100)
-        expected = math.ceil(job["duration"] / MOTION_STEP)
-        scores = scores[:expected] + [100] * max(0, expected-len(scores))
-        patch_job(key, stillnessStatus="ready", stillnessProgress=100,
-                  stillnessScores=scores, stillnessStep=MOTION_STEP, stillnessVersion=1)
+        node = shutil.which("node")
+        if not node:
+            raise ValueError("Stillness detection needs Node.js 18+ on PATH. Install Node.js and restart the local server.")
+        decoder = start_process(["ffmpeg", "-v", "error", *decoding_options(), "-i", str(job["source"]),
+                                 "-map", "0:v:0", "-an", "-vf", "fps=5:start_time=0,scale=320:180",
+                                 "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        tracker = start_process([node, str(ROOT / "motion-cli.mjs"), str(job["duration"])],
+                                stdin=decoder.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        decoder.stdout.close()
+        result = None
+        for line in tracker.stdout:
+            data = json.loads(line)
+            if "progress" in data:
+                patch_job(key, stillnessProgress=min(99, data["progress"]/job["duration"]*100))
+            else:
+                result = data
+        if tracker.wait() != 0 or decoder.wait() != 0 or result is None:
+            raise ValueError("Couldn't track motion in this video. Try another format.")
+        patch_job(key, stillnessStatus="ready", stillnessProgress=100, **result)
         persist_job(key)
     except Exception as exc:
         patch_job(key, stillnessStatus="error", stillnessError=user_error(exc))
     finally:
-        if proc:
-            proc.stdout.close()
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
-            with LOCK:
-                PROCESSES.discard(proc)
+        for proc in (tracker, decoder):
+            if proc:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+                for stream in (proc.stdout, proc.stderr):
+                    if stream:
+                        stream.close()
+                with LOCK:
+                    PROCESSES.discard(proc)
 
 
 def user_error(exc):
@@ -484,7 +468,7 @@ class Handler(BaseHTTPRequestHandler):
                     job = JOBS.get(key, {})
                     if job.get("status") != "ready" or "source" not in job:
                         raise ValueError("Choose a video first.")
-                    cached = job.get("stillnessStatus") == "ready" and job.get("stillnessVersion") == 1
+                    cached = job.get("stillnessStatus") == "ready" and job.get("stillnessVersion") == MOTION_VERSION
                     start = not cached and job.get("stillnessStatus") != "analyzing"
                     if start:
                         job.update(stillnessStatus="analyzing", stillnessProgress=0, stillnessError=None)

@@ -1,8 +1,9 @@
-import { MOTION_WIDTH, MOTION_HEIGHT, MOTION_STEP, frameChange } from './stillness.mjs';
+import { WIDTH as MOTION_WIDTH, HEIGHT as MOTION_HEIGHT, VERSION as MOTION_VERSION } from './motion.mjs';
+import { createMotionAnalyzer } from './motion-gpu.mjs';
 import { videoProfile, softwareVideoOptions } from './video-profile.mjs';
 import { FFmpeg } from './vendor/ffmpeg/index.js';
 import { planExport, exportGraph } from './export-plan.mjs';
-import { analyzeNative, renderNative, analyzeStillnessNative } from './native-backend.mjs?v=20261125-1';
+import { analyzeNative, renderNative, analyzeStillnessNative } from './native-backend.mjs?v=20261125-2';
 
 const jobs=new Map();
 const MAX_SIZE=512*1024*1024;
@@ -132,31 +133,37 @@ async function analyze(job) {
   }
 }
 async function analyzeStillness(job) {
-  let ffmpeg,raw,onProgress;
+  let ffmpeg,raw,onProgress,detector;
   try {
     let analysis;
     try {analysis=await analyzeStillnessNative(source.file,job);}
     catch {
       ffmpeg=await mountSource();raw=`motion-${job.id}.rgb`;
-      onProgress=({time})=>{job.stillnessProgress=Math.min(95,time/1e6/job.duration*100);};
-      ffmpeg.on('progress',onProgress);
-      await execute(ffmpeg,['-i',source.input,'-map','0:v:0','-an','-vf','fps=10:start_time=0,scale=64:36',
-        '-pix_fmt','rgb24','-f','rawvideo',raw]);
-      const bytes=await ffmpeg.readFile(raw),size=MOTION_WIDTH*MOTION_HEIGHT*3,scores=[];
-      if(bytes.length<size)throw new Error('No video frames were decoded.');
-      for(let i=size;i+size<=bytes.length;i+=size) {
-        scores.push(frameChange(bytes.subarray(i-size,i),bytes.subarray(i,i+size)));
-        if(scores.length%300===0)await new Promise(resolve=>setTimeout(resolve,0));
+      detector=createMotionAnalyzer();
+      // Bound raw-frame memory even for long recordings. Seek each chunk into
+      // the source, retaining the detector's one-second history across chunks.
+      const size=MOTION_WIDTH*MOTION_HEIGHT*3;
+      for(let start=0;start<job.duration;start+=10) {
+        const length=Math.min(10,job.duration-start);
+        onProgress=({time})=>{job.stillnessProgress=Math.min(99,(start+time/1e6)/job.duration*100);};
+        ffmpeg.on('progress',onProgress);
+        try {
+          await execute(ffmpeg,['-ss',String(start),'-i',source.input,'-t',String(length),'-map','0:v:0','-an','-vf','fps=5:start_time=0,scale=320:180',
+            '-pix_fmt','rgb24','-f','rawvideo',raw]);
+          const bytes=await ffmpeg.readFile(raw),count=Math.ceil(length/.2);
+          if(bytes.length<size)throw new Error('No video frames were decoded.');
+          for(let i=0;i<count;i++) {
+            detector.add((i+1)*size<=bytes.length?bytes.subarray(i*size,(i+1)*size):null);
+            if(i%5===0)await new Promise(resolve=>setTimeout(resolve,0));
+          }
+        }finally{ffmpeg.off('progress',onProgress);await ffmpeg.deleteFile(raw);}
       }
-      scores.push(scores.at(-1)??100);
-      const count=Math.ceil(job.duration/MOTION_STEP);
-      while(scores.length<count)scores.push(100);
-      analysis={stillnessScores:scores.slice(0,count),stillnessStep:MOTION_STEP,stillnessVersion:1,stillnessProcessing:'wasm'};
+      analysis=detector.finish(job.duration);
     }
     Object.assign(job,analysis,{stillnessStatus:'ready',stillnessProgress:100});
     await cacheSource(job);
   }catch(error){job.stillnessStatus='error';job.stillnessError=error.message||'Could not analyze stillness.';}
-  finally{if(ffmpeg){if(onProgress)ffmpeg.off('progress',onProgress);if(raw)try{await ffmpeg.deleteFile(raw);}catch{}}}
+  finally{detector?.dispose();if(ffmpeg){if(onProgress)ffmpeg.off('progress',onProgress);if(raw)try{await ffmpeg.deleteFile(raw);}catch{}}}
 }
 
 export async function upload(file) {
@@ -221,7 +228,7 @@ export async function request(url,options) {
   if(url==='/api/stillness') {
     const job=jobs.get(body.id);
     if(!job||job.status!=='ready'||source?.id!==body.id)throw new Error('Choose the video again to analyze stillness.');
-    if(job.stillnessStatus!=='analyzing'&&!(job.stillnessStatus==='ready'&&job.stillnessVersion===1)) {
+    if(job.stillnessStatus!=='analyzing'&&!(job.stillnessStatus==='ready'&&job.stillnessVersion===MOTION_VERSION)) {
       Object.assign(job,{stillnessStatus:'analyzing',stillnessProgress:0,stillnessError:null});analyzeStillness(job);
     }
     return {id:body.id};

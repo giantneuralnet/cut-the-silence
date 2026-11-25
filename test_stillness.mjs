@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {frameChange,stillnessRegions,combineDetections,MOTION_WIDTH,MOTION_HEIGHT} from './public/stillness.mjs';
+import {stillnessRegions,combineDetections} from './public/stillness.mjs';
 import {detectRegions,applyOverrides,setOverride,editMasks} from './public/timeline.mjs';
 const at=(regions,t)=>regions.find(r=>r.start<=t&&t<r.end);
 const motion=[...Array(20).fill(0),...Array(20).fill(8),...Array(20).fill(0)];
@@ -33,14 +33,4 @@ test('manual keeps and dragged offsets survive visual slider changes and toggle 
   }
   const disabled=applyOverrides([{start:0,end:6,kind:'motion',autoCut:false}],overrides);
   assert.equal(at(disabled,.8).cut,false);
-});
-test('frame scoring recognizes frozen frames and small localized movement without sound data',()=>{
-  const black=new Uint8Array(MOTION_WIDTH*MOTION_HEIGHT*3),moved=black.slice();
-  assert.equal(frameChange(black,black),0);
-  for(let y=0;y<9;y++)for(let x=0;x<8;x++)moved.fill(255,(y*MOTION_WIDTH+x)*3,(y*MOTION_WIDTH+x)*3+3);
-  assert.equal(frameChange(black,moved),100);
-  assert.equal(frameChange(null,moved),100);
-  const rgba=new Uint8Array(MOTION_WIDTH*MOTION_HEIGHT*4),rgba2=rgba.slice();
-  for(let y=0;y<9;y++)for(let x=0;x<8;x++)rgba2.fill(255,(y*MOTION_WIDTH+x)*4,(y*MOTION_WIDTH+x)*4+3);
-  assert.equal(frameChange(rgba,rgba2,4),100);
 });
